@@ -26,6 +26,16 @@ function toNumberIfNumeric(v) {
   return Number.isFinite(n) && String(n) === String(v) ? n : v;
 }
 
+const GRAPHQL_NAME_PATTERN = /^[_A-Za-z][_0-9A-Za-z]*$/;
+
+function validateGraphQLName(value, label) {
+  const normalized = String(value);
+  if (!GRAPHQL_NAME_PATTERN.test(normalized)) {
+    throw new Error(`Invalid GraphQL ${label}`);
+  }
+  return normalized;
+}
+
 function buildFiltersFromQuery(q) {
   if (q.filters) {
     try {
@@ -85,13 +95,14 @@ async function fetchRowsFromSource(req, { config, log }) {
   const q = req.query;
   const limit = Number(q.limit || 200);
   const offset = Number(q.offset || 0);
-  const index = q.index || "case";
+  const index = validateGraphQLName(q.index || "case", "index");
 
   const base = (config?.guppyConfig?.host || "http://localhost:3010").replace(/\/+$/, "");
 
   const fields = (q.fields ? String(q.fields).split(",").map((s) => s.trim()).filter(Boolean) : [])
     .concat([q.x_field, q.y_field].filter(Boolean))
-    .filter((v, i, a) => v && a.indexOf(v) === i);
+    .filter((v, i, a) => v && a.indexOf(v) === i)
+    .map((field) => validateGraphQLName(field, "field"));
   if (!fields.length) throw new Error("no fields provided (use ?fields=a,b or ?x_field=&y_field=)");
 
   const filters = buildFiltersFromQuery(q);
