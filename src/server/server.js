@@ -241,7 +241,10 @@ function buildAnagineRouter() {
   router.use((err, req, res, next) => {
     void next;
     if (err instanceof CodedError) res.status(err.code).send(err.msg);
-    else res.status(500).send(err);
+    else {
+      log.error("[server] Unhandled request error:", err);
+      res.status(500).json({ error: "Internal server error" });
+    }
   });
 
   return router;

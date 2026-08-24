@@ -87,14 +87,6 @@ async function fetchRowsFromSource(req, { config, log }) {
   const offset = Number(q.offset || 0);
   const index = q.index || "case";
 
-  if (q.url) {
-    const r = await fetch(q.url);
-    if (!r.ok) throw new Error(`fetch url failed: ${r.status}`);
-    const json = await r.json();
-    const rows = extractRowsFromAny(json, index);
-    return rows.slice(0, limit);
-  }
-
   const base = (config?.guppyConfig?.host || "http://localhost:3010").replace(/\/+$/, "");
 
   const fields = (q.fields ? String(q.fields).split(",").map((s) => s.trim()).filter(Boolean) : [])
@@ -105,8 +97,8 @@ async function fetchRowsFromSource(req, { config, log }) {
   const filters = buildFiltersFromQuery(q);
 
   const gql = `
-    query($first:Int, $offset:Int){
-      ${index}(first:$first, offset:$offset) {
+    query($first:Int, $offset:Int, $filters:JSON){
+      ${index}(filter:$filters, first:$first, offset:$offset, accessibility:all) {
         ${fields.join("\n        ")}
       }
     }`;
@@ -136,8 +128,8 @@ async function fetchRowsFromSource(req, { config, log }) {
   return extractRowsFromAny(json, index);
 }
 
-export default function registerLegacyDataRoutes(router, { config, log }) {
-  router.get("/hello", (req, res) => {
+export default function registerLegacyDataRoutes(router, { config, log, checkAuth }) {
+  router.get("/hello", checkAuth, (req, res) => {
     res.send({
       text: "Hello World",
       time: new Date().toLocaleString("en-US", {
@@ -152,12 +144,7 @@ export default function registerLegacyDataRoutes(router, { config, log }) {
     });
   });
 
-  router.get("/pdf", (req, res) => {
-    const filepath = "/home/exouser/Downloads/gen3.pdf";
-    res.download(filepath);
-  });
-
-  router.post("/R/lm", (req, res) => {
+  router.post("/R/lm", checkAuth, (req, res) => {
     const data = req.body || { x: [1, 2, 3], y: [3, 5, 7] };
     const inputJSON = JSON.stringify(data);
     const rScriptPath = process.env.RSCRIPT_PATH || path.join(__dirname, "../../../R/lm.R");
@@ -195,7 +182,7 @@ export default function registerLegacyDataRoutes(router, { config, log }) {
     });
   });
 
-  router.get("/llm/chat", async (req, res) => {
+  router.get("/llm/chat", checkAuth, async (req, res) => {
     const { model = config.defaultLlmModel, prompt, stream, ...options } = req.query;
     const streamFlag = toBool(stream);
     const messages = [{ role: "user", content: prompt || "Hi, could you introduce yourself?" }];
@@ -207,7 +194,7 @@ export default function registerLegacyDataRoutes(router, { config, log }) {
     }
   });
 
-  router.get("/llm/generate", async (req, res) => {
+  router.get("/llm/generate", checkAuth, async (req, res) => {
     const { model = config.defaultLlmModel, prompt = "", stream, ...options } = req.query;
     const streamFlag = toBool(stream);
     try {
@@ -227,7 +214,7 @@ export default function registerLegacyDataRoutes(router, { config, log }) {
     }
   });
 
-  router.get("/data/apply", async (req, res) => {
+  router.get("/data/apply", checkAuth, async (req, res) => {
     try {
       const action = (req.query.action || "").toLowerCase();
       if (!["regression", "llm"].includes(action)) {
