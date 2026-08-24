@@ -1,5 +1,8 @@
 # anagine-server
 
+> [!NOTE]
+> The Anagine services are maintained in this repo: https://github.com/Su-informatics-lab/ardac-anagine.
+
 Express API and route handlers for the Anagine server service.
 
 ## Build
