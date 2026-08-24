@@ -1,0 +1,94 @@
+{
+  "ARDaC-AlcHepNet": [
+    {
+      "project_id": "ARDaC-AlcHepNet",
+      "submitter_id": "obs_11001_obs",
+      "age_at_index": 58,
+      "ethnicity": "not hispanic or latino",
+      "gender": "M",
+      "race": "white",
+      "year_of_birth": 1962
+    },
+    {
+      "project_id": "ARDaC-AlcHepNet",
+      "submitter_id": "obs_11002_obs",
+      "age_at_index": 61,
+      "ethnicity": "not hispanic or latino",
+      "gender": "F",
+      "race": "native hawaiian or other pacific islander",
+      "year_of_birth": 1958
+    },
+    {
+      "project_id": "ARDaC-AlcHepNet",
+      "submitter_id": "obs_11003_obs",
+      "age_at_index": 36,
+      "ethnicity": "not hispanic or latino",
+      "gender": "M",
+      "race": "white",
+      "year_of_birth": 1983
+    },
+    {
+      "project_id": "ARDaC-AlcHepNet",
+      "submitter_id": "obs_11004_obs",
+      "age_at_index": 55,
+      "ethnicity": "not hispanic or latino",
+      "gender": "M",
+      "race": "white",
+      "year_of_birth": 1964
+    },
+    {
+      "project_id": "ARDaC-AlcHepNet",
+      "submitter_id": "obs_11006_obs",
+      "age_at_index": 50,
+      "ethnicity": "not hispanic or latino",
+      "gender": "M",
+      "race": "white",
+      "year_of_birth": 1970
+    },
+    {
+      "project_id": "ARDaC-AlcHepNet",
+      "submitter_id": "obs_11007_obs",
+      "age_at_index": 33,
+      "ethnicity": "not hispanic or latino",
+      "gender": "M",
+      "race": "asian",
+      "year_of_birth": 1986
+    },
+    {
+      "project_id": "ARDaC-AlcHepNet",
+      "submitter_id": "obs_11008_obs",
+      "age_at_index": 41,
+      "ethnicity": "not hispanic or latino",
+      "gender": "F",
+      "race": "white",
+      "year_of_birth": 1979
+    },
+    {
+      "project_id": "ARDaC-AlcHepNet",
+      "submitter_id": "obs_11009_obs",
+      "age_at_index": 54,
+      "ethnicity": "not hispanic or latino",
+      "gender": "M",
+      "race": "white",
+      "year_of_birth": 1966
+    },
+    {
+      "project_id": "ARDaC-AlcHepNet",
+      "submitter_id": "obs_11010_obs",
+      "age_at_index": 42,
+      "ethnicity": "not hispanic or latino",
+      "gender": "F",
+      "race": "white",
+      "year_of_birth": 1978
+    },
+    {
+      "project_id": "ARDaC-AlcHepNet",
+      "submitter_id": "obs_11011_obs",
+      "age_at_index": 68,
+      "ethnicity": "not hispanic or latino",
+      "gender": "F",
+      "race": "white",
+      "year_of_birth": 1951
+    }
+  ]
+}

@@ -1,0 +1,134 @@
+---
+title: "Anagine Report"
+output:
+  html_document:
+    theme: flatly
+params:
+  meta_json: "{}"
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+library(jsonlite)
+library(dplyr)
+library(ggplot2)
+
+meta <- jsonlite::fromJSON(params$meta_json)
+
+df <- meta$fetchedData
+if (is.null(df) || length(df) == 0) {
+  df <- data.frame()
+} else {
+  df <- as.data.frame(df, stringsAsFactors = FALSE)
+}
+```
+
+## Run info
+```{r}
+print(knitr::kable(data.frame(
+  generated_at = meta$generated_at,
+  kernel = meta$kernel,
+  fetchedCount = meta$fetchedCount
+)))
+```
+
+## Filters
+```{r, results='asis'}
+filters <- meta$filters
+`%||%` <- function(a,b) if (!is.null(a)) a else b
+
+if (is.null(filters) || length(filters) == 0) {
+  cat("No filters applied.\n")
+} else {
+  to_vals <- function(x){
+    if (is.list(x) && !is.null(x$selectedValues)) {
+      paste(x$selectedValues, collapse = ", ")
+    } else if (is.list(x) && (!is.null(x$lowerBound) || !is.null(x$upperBound))) {
+      paste0("[", x$lowerBound %||% "-inf", ", ", x$upperBound %||% "+inf", "]")
+    } else if (is.character(x) || is.numeric(x) || is.logical(x)) {
+      paste(x, collapse = ", ")
+    } else {
+      as.character(jsonlite::toJSON(x, auto_unbox = TRUE))
+    }
+  }
+
+  df_filters <- data.frame(
+    field = names(filters),
+    value = vapply(filters, to_vals, FUN.VALUE = character(1)),
+    stringsAsFactors = FALSE
+  )
+  print(knitr::kable(df_filters, align = "ll"))
+
+  cat("\n\n<details><summary>Raw filters (JSON)</summary>\n\n```json\n",
+      jsonlite::toJSON(filters, auto_unbox = TRUE, pretty = TRUE),
+      "\n```\n\n</details>\n", sep = "")
+}
+```
+
+## Basic Summary
+```{r, results='asis'}
+if (nrow(df) == 0) {
+  cat("No fetched data. Please call /anagine/fetch first.\n")
+} else {
+  summary_cols <- intersect(c("aki_status","study_site"), names(df))
+  if (length(summary_cols) == 0) {
+    cat("No summary columns found in fetched data.\n")
+  } else {
+    for (col in summary_cols) {
+      cat("\n\n### ", col, "\n\n", sep = "")
+      tab <- sort(table(df[[col]], useNA = "ifany"), decreasing = TRUE)
+      out <- data.frame(
+        value = names(tab),
+        count = as.integer(tab),
+        percent = round(100 * as.integer(tab) / sum(tab), 1),
+        stringsAsFactors = FALSE
+      )
+      print(knitr::kable(out))
+    }
+  }
+}
+```
+
+## Numeric ranges
+```{r, results='asis'}
+if (nrow(df) > 0) {
+  num_cols <- intersect(c("year_of_birth","days_to_death"), names(df))
+  for (col in num_cols) {
+    cat("\n\n### ", col, "\n\n", sep = "")
+    x <- suppressWarnings(as.numeric(df[[col]]))
+    x <- x[is.finite(x)]
+    if (length(x) == 0) {
+      cat("No valid numeric values.\n")
+    } else {
+      s <- summary(x)
+      out <- data.frame(stat = names(s), value = as.numeric(s), row.names = NULL)
+      print(knitr::kable(out))
+    }
+  }
+}
+```
+
+## Plot: year_of_birth vs days_to_death
+```{r}
+if (nrow(df) > 0 && all(c("year_of_birth","days_to_death") %in% names(df))) {
+  df2 <- df %>%
+    mutate(
+      year_of_birth = suppressWarnings(as.numeric(year_of_birth)),
+      days_to_death = suppressWarnings(as.numeric(days_to_death))
+    ) %>%
+    filter(is.finite(year_of_birth), is.finite(days_to_death))
+
+  if (nrow(df2) > 1) {
+    p <- ggplot(df2, aes(x = year_of_birth, y = days_to_death)) +
+      geom_point(alpha = 0.6) +
+      labs(x="year_of_birth", y="days_to_death",
+          title="year_of_birth vs days_to_death")
+    print(p)
+  } else {
+    cat("Not enough valid points for plot.\n")
+  }
+} else {
+  cat("Missing required fields.\n")
+}
+```

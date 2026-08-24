@@ -1,0 +1,226 @@
+---
+geometry: margin=1.7cm
+params:
+  meta_json: null
+output:
+  html_document:
+    toc: false
+    df_print: paged
+  pdf_document:
+    fig_caption: yes
+    fig_height: 4.5
+    fig_width: 6.4
+    keep_tex: yes
+header-includes:
+  - \usepackage{float}
+---
+
+```{r setup, include=FALSE}
+suppressPackageStartupMessages({
+  library(jsonlite)
+  library(dplyr)
+  library(ggplot2)
+  library(knitr)
+})
+opts_chunk$set(echo = FALSE, fig.align='center', message=FALSE, warning=FALSE)
+
+# ---- read meta (from anagine report.js) ----
+meta <- tryCatch(jsonlite::fromJSON(params$meta_json, flatten = TRUE), error = function(e) list())
+requested_by <- if (!is.null(meta$requested_by)) as.character(meta$requested_by)[1] else ""
+if (length(requested_by) == 0 || is.na(requested_by) || requested_by == "") requested_by <- ""
+
+escape_latex_text <- function(x) {
+  if (length(x) == 0 || is.na(x) || x == "") return("")
+  x <- gsub("\\\\", "\\\\textbackslash{}", x)
+  x <- gsub("([#$%&_{}])", "\\\\\\1", x, perl = TRUE)
+  x <- gsub("~", "\\\\textasciitilde{}", x, fixed = TRUE)
+  x <- gsub("\\^", "\\\\textasciicircum{}", x, perl = TRUE)
+  x
+}
+
+generated_at <- if (!is.null(meta$generated_at)) as.character(meta$generated_at) else ""
+if (length(generated_at) == 0 || is.na(generated_at[1]) || generated_at[1] == "") {
+  gt <- Sys.time()
+} else {
+  ga <- generated_at[1]
+  ga <- sub("Z$", "+0000", ga)
+  ga <- sub("([+-][0-9]{2}):([0-9]{2})$", "\\1\\2", ga)
+  gt <- as.POSIXct(ga, format = "%Y-%m-%dT%H:%M:%OS%z", tz = "UTC")
+  if (is.na(gt)) gt <- Sys.time()
+}
+
+report_month <- format(gt, "%B, %Y")
+report_date  <- format(gt, "%B %d, %Y")
+gt_et <- as.POSIXct(format(gt, tz = "America/New_York", usetz = TRUE), tz = "America/New_York")
+report_time  <- format(gt_et, "%I:%M %p %Z")
+
+# fetchedData -> data.frame
+df <- meta$fetchedData
+if (is.null(df)) df <- data.frame()
+if (is.list(df) && !is.data.frame(df)) df <- dplyr::bind_rows(df)
+
+pick_col <- function(df, candidates) {
+  nm <- names(df)
+  hit <- candidates[candidates %in% nm]
+  if (length(hit)) hit[1] else NA_character_
+}
+
+# primary_site: primary_site, primary_site_of_disease, diagnoses.primary_site
+ps_col <- pick_col(df, c("primary_site", "primary_site_of_disease", "PrimarySite", "diagnoses.primary_site"))
+if (!is.na(ps_col)) {
+  ps_raw <- df[[ps_col]]
+  df$primary_site_val <- vapply(ps_raw, function(v) {
+    if (is.null(v)) return(NA_character_)
+    if (is.list(v) || (is.vector(v) && length(v) > 1)) {
+      v <- unlist(v)
+      v <- v[!is.na(v) & trimws(as.character(v)) != ""]
+      if (length(v) == 0) return(NA_character_)
+      return(as.character(v[1]))
+    }
+    as.character(v)
+  }, character(1))
+} else {
+  df$primary_site_val <- NA_character_
+}
+df$primary_site_val[is.na(df$primary_site_val) | trimws(df$primary_site_val) == ""] <- "Unknown"
+
+# sex/gender: sex, gender, demographics.gender, demographics.sex
+sex_col <- pick_col(df, c("sex", "gender", "demographics.gender", "demographics.sex"))
+if (!is.na(sex_col)) {
+  sex_raw <- df[[sex_col]]
+  df$sex_val <- vapply(sex_raw, function(v) {
+    if (is.null(v)) return(NA_character_)
+    if (is.list(v)) {
+      if (!is.null(v$gender)) return(as.character(v$gender))
+      if (!is.null(v$sex)) return(as.character(v$sex))
+      v <- unlist(v)
+      v <- v[!is.na(v) & trimws(as.character(v)) != ""]
+      if (length(v) == 0) return(NA_character_)
+      return(as.character(v[1]))
+    }
+    if (is.vector(v) && length(v) > 1) {
+      v <- v[!is.na(v) & trimws(as.character(v)) != ""]
+      if (length(v) == 0) return(NA_character_)
+      return(as.character(v[1]))
+    }
+    as.character(v)
+  }, character(1))
+} else {
+  df$sex_val <- NA_character_
+}
+df$sex_val[is.na(df$sex_val) | trimws(df$sex_val) == ""] <- "Unknown"
+```
+
+```{r cover_pdf, results='asis'}
+if (knitr::is_latex_output()) {
+  cat("\\renewcommand{\\contentsname}{\\centering Contents \\vspace{1cm}}\n")
+  cat("\\centering\n")
+  if (file.exists("AlcHepNet_logo.jpg")) {
+    cat("\\includegraphics[width=0.62\\textwidth]{AlcHepNet_logo.jpg}\n\n")
+  }
+  cat("\\begin{LARGE}\n")
+  cat("Test Report - Primary Site and Sex\n")
+  cat("\\end{LARGE}\n\n")
+  if (nzchar(requested_by)) {
+    cat("\\vspace{6pt}\n")
+    cat(sprintf("Report generated for %s\n\n", escape_latex_text(requested_by)))
+  }
+  cat("\\vspace{12pt}\n\\vspace{12pt}\n")
+  cat("\\begin{LARGE}\n")
+  cat(report_month)
+  cat("\\end{LARGE}\n\n")
+  cat("\\vspace{12pt}\n")
+  cat("\\begin{center}\n")
+  cat(sprintf("Data extracted %s at %s\n", report_date, report_time))
+  cat("\\end{center}\n")
+  cat("\\raggedright\n")
+  cat("\\clearpage\n\n")
+  cat("\\begingroup\n")
+  cat("\\renewcommand{\\listtablename}{Tables}\n")
+  cat("\\listoftables\n")
+  cat("\\vspace{18pt}\n")
+  cat("\\renewcommand{\\listfigurename}{Figures}\n")
+  cat("\\listoffigures\n")
+  cat("\\endgroup\n")
+  cat("\\clearpage\n")
+}
+```
+
+```{r cover_html, results='asis'}
+if (knitr::is_html_output()) {
+  cat("# Test Report - Primary Site and Sex\n\n")
+  if (file.exists("AlcHepNet_logo.jpg")) {
+    cat("<div style='text-align:center;'>\n")
+    cat("<img src='AlcHepNet_logo.jpg' style='width:52%; max-width:520px;' />\n")
+    cat("</div>\n\n")
+  }
+  if (nzchar(requested_by)) {
+    cat(sprintf("Report generated for `%s`\n\n", requested_by))
+  }
+  cat(sprintf("**%s**  \n", report_month))
+  cat(sprintf("Data extracted %s at %s\n\n", report_date, report_time))
+}
+```
+
+```{r summary_stats, results='asis'}
+N <- nrow(df)
+n_proj <- length(unique(df$project_id[!is.na(df$project_id)]))
+cat(sprintf("**Participants:** %d  \n**Projects:** %d\n\n", N, n_proj))
+```
+
+## Primary Site
+```{r primary_site_table, results='asis'}
+if (nrow(df) == 0 || all(df$primary_site_val == "Unknown")) {
+  cat("No primary_site data. Please include primary_site in fetch fields.\n")
+} else {
+  tab <- df %>% count(primary_site_val, name = "n") %>%
+    mutate(percent = round(100 * n / sum(n), 2)) %>%
+    arrange(desc(n))
+  colnames(tab) <- c("Primary Site", "Count", "Percent (%)")
+  print(knitr::kable(tab))
+}
+```
+
+```{r primary_site_plot, fig.cap="Primary Site distribution", fig.width=8, fig.height=6}
+if (nrow(df) > 0 && !all(df$primary_site_val == "Unknown")) {
+  tab <- df %>% count(primary_site_val, name = "n") %>%
+    mutate(percent = round(100 * n / sum(n), 2)) %>%
+    arrange(desc(n)) %>%
+    head(20)
+  tab$primary_site_val <- factor(tab$primary_site_val, levels = rev(tab$primary_site_val))
+  ggplot(tab, aes(x = primary_site_val, y = percent, fill = primary_site_val)) +
+    geom_col() +
+    geom_text(aes(label = sprintf("%s (%.2f%%)", n, percent)), hjust = -0.1, size = 3.5) +
+    coord_flip() +
+    labs(title = "Primary Site", x = "", y = "Percent (%)") +
+    theme(legend.position = "none", axis.text.y = element_text(size = 9))
+}
+```
+
+## Sex
+```{r sex_table, results='asis'}
+if (nrow(df) == 0 || all(df$sex_val == "Unknown")) {
+  cat("No Sex data. Please include gender or sex in fetch fields.\n")
+} else {
+  tab <- df %>% count(sex_val, name = "n") %>%
+    mutate(percent = round(100 * n / sum(n), 2)) %>%
+    arrange(desc(n))
+  colnames(tab) <- c("Sex", "Count", "Percent (%)")
+  print(knitr::kable(tab))
+}
+```
+
+```{r sex_plot, fig.cap="Sex distribution", fig.width=6, fig.height=5}
+if (nrow(df) > 0 && !all(df$sex_val == "Unknown")) {
+  tab <- df %>% count(sex_val, name = "n") %>%
+    mutate(percent = round(100 * n / sum(n), 2)) %>%
+    arrange(desc(n))
+  tab <- tab %>% mutate(label = sprintf("%s (%d, %.1f%%)", sex_val, n, percent))
+  ggplot(tab, aes(x = "", y = n, fill = sex_val)) +
+    geom_col() +
+    coord_polar(theta = "y") +
+    geom_text(aes(label = label), position = position_stack(vjust = 0.5), size = 4) +
+    labs(title = "Sex", fill = "Sex") +
+    theme_void()
+}
+```
