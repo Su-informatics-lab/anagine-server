@@ -26,6 +26,16 @@ function toNumberIfNumeric(v) {
   return Number.isFinite(n) && String(n) === String(v) ? n : v;
 }
 
+const GRAPHQL_NAME_PATTERN = /^[_A-Za-z][_0-9A-Za-z]*$/;
+
+function validateGraphQLName(value, label) {
+  const normalized = String(value);
+  if (!GRAPHQL_NAME_PATTERN.test(normalized)) {
+    throw new Error(`Invalid GraphQL ${label}`);
+  }
+  return normalized;
+}
+
 function buildFiltersFromQuery(q) {
   if (q.filters) {
     try {
@@ -85,28 +95,21 @@ async function fetchRowsFromSource(req, { config, log }) {
   const q = req.query;
   const limit = Number(q.limit || 200);
   const offset = Number(q.offset || 0);
-  const index = q.index || "case";
-
-  if (q.url) {
-    const r = await fetch(q.url);
-    if (!r.ok) throw new Error(`fetch url failed: ${r.status}`);
-    const json = await r.json();
-    const rows = extractRowsFromAny(json, index);
-    return rows.slice(0, limit);
-  }
+  const index = validateGraphQLName(q.index || "case", "index");
 
   const base = (config?.guppyConfig?.host || "http://localhost:3010").replace(/\/+$/, "");
 
   const fields = (q.fields ? String(q.fields).split(",").map((s) => s.trim()).filter(Boolean) : [])
     .concat([q.x_field, q.y_field].filter(Boolean))
-    .filter((v, i, a) => v && a.indexOf(v) === i);
+    .filter((v, i, a) => v && a.indexOf(v) === i)
+    .map((field) => validateGraphQLName(field, "field"));
   if (!fields.length) throw new Error("no fields provided (use ?fields=a,b or ?x_field=&y_field=)");
 
   const filters = buildFiltersFromQuery(q);
 
   const gql = `
-    query($first:Int, $offset:Int){
-      ${index}(first:$first, offset:$offset) {
+    query($first:Int, $offset:Int, $filters:JSON){
+      ${index}(filter:$filters, first:$first, offset:$offset, accessibility:all) {
         ${fields.join("\n        ")}
       }
     }`;
@@ -136,8 +139,8 @@ async function fetchRowsFromSource(req, { config, log }) {
   return extractRowsFromAny(json, index);
 }
 
-export default function registerLegacyDataRoutes(router, { config, log }) {
-  router.get("/hello", (req, res) => {
+export default function registerLegacyDataRoutes(router, { config, log, checkAuth }) {
+  router.get("/hello", checkAuth, (req, res) => {
     res.send({
       text: "Hello World",
       time: new Date().toLocaleString("en-US", {
@@ -152,12 +155,7 @@ export default function registerLegacyDataRoutes(router, { config, log }) {
     });
   });
 
-  router.get("/pdf", (req, res) => {
-    const filepath = "/home/exouser/Downloads/gen3.pdf";
-    res.download(filepath);
-  });
-
-  router.post("/R/lm", (req, res) => {
+  router.post("/R/lm", checkAuth, (req, res) => {
     const data = req.body || { x: [1, 2, 3], y: [3, 5, 7] };
     const inputJSON = JSON.stringify(data);
     const rScriptPath = process.env.RSCRIPT_PATH || path.join(__dirname, "../../../R/lm.R");
@@ -195,7 +193,7 @@ export default function registerLegacyDataRoutes(router, { config, log }) {
     });
   });
 
-  router.get("/llm/chat", async (req, res) => {
+  router.get("/llm/chat", checkAuth, async (req, res) => {
     const { model = config.defaultLlmModel, prompt, stream, ...options } = req.query;
     const streamFlag = toBool(stream);
     const messages = [{ role: "user", content: prompt || "Hi, could you introduce yourself?" }];
@@ -207,7 +205,7 @@ export default function registerLegacyDataRoutes(router, { config, log }) {
     }
   });
 
-  router.get("/llm/generate", async (req, res) => {
+  router.get("/llm/generate", checkAuth, async (req, res) => {
     const { model = config.defaultLlmModel, prompt = "", stream, ...options } = req.query;
     const streamFlag = toBool(stream);
     try {
@@ -227,7 +225,7 @@ export default function registerLegacyDataRoutes(router, { config, log }) {
     }
   });
 
-  router.get("/data/apply", async (req, res) => {
+  router.get("/data/apply", checkAuth, async (req, res) => {
     try {
       const action = (req.query.action || "").toLowerCase();
       if (!["regression", "llm"].includes(action)) {
