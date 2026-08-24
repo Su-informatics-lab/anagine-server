@@ -1,0 +1,253 @@
+---
+geometry: margin=1.7cm
+params:
+  meta_json: null
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    df_print: paged
+  pdf_document:
+    toc: false
+    fig_caption: yes
+    fig_height: 4.5
+    fig_width: 6.4
+    keep_tex: yes
+header-includes:
+  - \usepackage{float}
+---
+
+```{r setup, include=FALSE}
+suppressPackageStartupMessages({
+  library(jsonlite)
+  library(dplyr)
+  library(ggplot2)
+  library(knitr)
+})
+opts_chunk$set(echo = FALSE, fig.align='center', message=FALSE, warning=FALSE)
+
+# ---- read meta (from anagine report.js) ----
+meta <- tryCatch(jsonlite::fromJSON(params$meta_json, flatten = TRUE), error = function(e) list())
+requested_by <- if (!is.null(meta$requested_by)) as.character(meta$requested_by)[1] else ""
+if (length(requested_by) == 0 || is.na(requested_by) || requested_by == "") requested_by <- ""
+
+escape_latex_text <- function(x) {
+  if (length(x) == 0 || is.na(x) || x == "") return("")
+  x <- gsub("\\\\", "\\\\textbackslash{}", x)
+  x <- gsub("([#$%&_{}])", "\\\\\\1", x, perl = TRUE)
+  x <- gsub("~", "\\\\textasciitilde{}", x, fixed = TRUE)
+  x <- gsub("\\^", "\\\\textasciicircum{}", x, perl = TRUE)
+  x
+}
+
+# prefer meta$generated_at (so cover date is tied to this report call)
+generated_at <- if (!is.null(meta$generated_at)) as.character(meta$generated_at) else ""
+if (length(generated_at) == 0 || is.na(generated_at[1]) || generated_at[1] == "") {
+  gt <- Sys.time()
+} else {
+  # Robust ISO8601 parse: support trailing Z and offset like +00:00.
+  ga <- generated_at[1]
+  ga <- sub("Z$", "+0000", ga)
+  ga <- sub("([+-][0-9]{2}):([0-9]{2})$", "\\1\\2", ga)
+  gt <- as.POSIXct(ga, format = "%Y-%m-%dT%H:%M:%OS%z", tz = "UTC")
+  if (is.na(gt)) gt <- Sys.time()
+}
+
+report_month <- format(gt, "%B, %Y")
+report_date  <- format(gt, "%B %d, %Y")
+gt_et <- as.POSIXct(format(gt, tz = "America/New_York", usetz = TRUE), tz = "America/New_York")
+report_time  <- format(gt_et, "%I:%M %p %Z")
+
+# fetchedData -> data.frame
+df <- meta$fetchedData
+if (is.null(df)) df <- data.frame()
+if (is.list(df) && !is.data.frame(df)) df <- dplyr::bind_rows(df)
+
+pick_col <- function(df, candidates) {
+  nm <- names(df)
+  hit <- candidates[candidates %in% nm]
+  if (length(hit)) hit[1] else NA_character_
+}
+
+# adjust these candidates if your guppy fields use different names
+yob_col  <- pick_col(df, c("year_of_birth","YearOfBirth","yob"))
+meld_col <- pick_col(df, c("meld","MELD","meld_score","meld_total"))
+cohort_col <- pick_col(df, c("cohort","Cohort","case_group"))
+
+# derive age (approx) from year_of_birth + report year
+if (!is.na(yob_col)) {
+  df$year_of_birth_num <- suppressWarnings(as.numeric(df[[yob_col]]))
+  df$age <- as.integer(format(gt, "%Y")) - df$year_of_birth_num
+  df$age <- ifelse(is.finite(df$age) & df$age >= 0 & df$age <= 120, df$age, NA_integer_)
+}
+
+# meld
+if (!is.na(meld_col)) {
+  meld_raw <- df[[meld_col]]
+  df$meld <- vapply(meld_raw, function(v) {
+    if (is.null(v)) return(NA_real_)
+    if (is.list(v) || is.vector(v)) {
+      vals <- suppressWarnings(as.numeric(unlist(v)))
+      vals <- vals[is.finite(vals)]
+      if (length(vals) == 0) return(NA_real_)
+      return(max(vals))
+    }
+    n <- suppressWarnings(as.numeric(v))
+    if (is.finite(n)) return(n)
+    return(NA_real_)
+  }, numeric(1))
+  df$meld <- ifelse(is.finite(df$meld), df$meld, NA_real_)
+}
+
+# Groups from cohort + study type prefix (obs/clinical/unknown).
+if (!is.na(cohort_col)) {
+  df$cohort_value <- as.character(df[[cohort_col]])
+} else {
+  df$cohort_value <- NA_character_
+}
+df$cohort_value[is.na(df$cohort_value) | trimws(df$cohort_value) == ""] <- "Unknown"
+
+# Prefer studies.submitter_id, then submitter_id, then pat_id, then _case_id.
+study_submitter_col <- pick_col(df, c("studies.submitter_id","studies.submitter_id.1"))
+id_col <- pick_col(df, c("submitter_id","SubmitterID","pat_id","_case_id"))
+raw_id <- if (!is.na(study_submitter_col)) as.character(df[[study_submitter_col]]) else if (!is.na(id_col)) as.character(df[[id_col]]) else rep("", nrow(df))
+raw_id[is.na(raw_id)] <- ""
+
+df$study_prefix <- ifelse(
+  grepl("_obs(_|$)", raw_id, ignore.case = TRUE), "obs",
+  ifelse(grepl("_clinical(_|$)", raw_id, ignore.case = TRUE), "clinical", "unknown")
+)
+df$group_label <- paste0(df$study_prefix, "-", df$cohort_value)
+```
+
+```{r cover_pdf, results='asis'}
+if (knitr::is_latex_output()) {
+  cat("\\centering\n")
+  if (file.exists("AlcHepNet_logo.jpg")) {
+    cat("\\includegraphics[width=0.62\\textwidth]{AlcHepNet_logo.jpg}\n\n")
+  }
+  cat("\\begin{LARGE}\n")
+  cat("Age and MELD stats report\n")
+  cat("\\end{LARGE}\n\n")
+  if (nzchar(requested_by)) {
+    cat("\\vspace{6pt}\n")
+    cat(sprintf("Report generated for %s\n\n", escape_latex_text(requested_by)))
+  }
+  cat("\\vspace{12pt}\n\\vspace{12pt}\n")
+  cat("\\begin{LARGE}\n")
+  cat(report_month)
+  cat("\n\\end{LARGE}\n\n")
+  cat("\\vspace{12pt}\n")
+  cat("\\begin{center}\n")
+  cat(sprintf("Data extracted %s at %s\n", report_date, report_time))
+  cat("\\end{center}\n")
+  cat("\\raggedright\n")
+  cat("\\clearpage\n\n")
+
+  # Page 2: Contents first, then Tables/Figures.
+  cat("\\begingroup\n")
+  cat("\\renewcommand{\\contentsname}{Contents}\n")
+  cat("\\tableofcontents\n")
+  cat("\\vspace{18pt}\n")
+  cat("\\renewcommand{\\listtablename}{Tables}\n")
+  cat("\\listoftables\n")
+  cat("\\vspace{18pt}\n")
+  cat("\\renewcommand{\\listfigurename}{Figures}\n")
+  cat("\\listoffigures\n")
+  cat("\\endgroup\n")
+  cat("\\clearpage\n")
+}
+```
+
+```{r cover_html, results='asis'}
+if (knitr::is_html_output()) {
+  cat("# Age and MELD stats report\n\n")
+  if (file.exists("AlcHepNet_logo.jpg")) {
+    cat("<div style='text-align:center;'>\n")
+    cat("<img src='AlcHepNet_logo.jpg' style='width:52%; max-width:520px;' />\n")
+    cat("</div>\n\n")
+  }
+  if (nzchar(requested_by)) {
+    cat(sprintf("Report generated for `%s`\n\n", requested_by))
+  }
+  cat(sprintf("**%s**  \n", report_month))
+  cat(sprintf("Data extracted %s at %s\n\n", report_date, report_time))
+}
+```
+
+```{r demographics_header, results='asis'}
+if (knitr::is_latex_output()) {
+  cat("\\begin{center}\n\\section{Demographics}\n\\end{center}\n")
+} else {
+  cat("## Demographics\n")
+}
+```
+
+
+```{r}
+if (!("age" %in% names(df)) || all(is.na(df$age))) {
+  cat("No age information available. Please include year_of_birth in fetch fields.\n")
+} else {
+  age_vec <- df$age[!is.na(df$age)]
+  age_tbl <- data.frame(
+    `Mean (SD)` = sprintf("%d (%d)", round(mean(age_vec)), round(sd(age_vec))),
+    Median      = round(median(age_vec)),
+    Minimum     = min(age_vec),
+    Maximum     = max(age_vec),
+    check.names = FALSE
+  )
+
+  age_kable <- kable(
+    age_tbl,
+    if (knitr::is_latex_output()) "latex" else "html",
+    caption = "Age breakdown",
+    align = "c",
+    booktabs = FALSE,
+    position = "H"
+  )
+  age_kable
+}
+```
+
+```{r meld_header, results='asis'}
+if (knitr::is_latex_output()) {
+  cat("\\newpage\n")
+  cat("\\begin{center}\n\\section{MELD}\n\\end{center}\n")
+} else {
+  cat("## MELD\n")
+}
+```
+
+```{r meld_hist, fig.cap="MELD histogram with binsize = 5", fig.width=7, fig.height=4.5}
+if (!("meld" %in% names(df)) || all(is.na(df$meld))) {
+  cat("No MELD information available. Please include meld field in fetch fields.\n")
+} else {
+  dd <- df %>% filter(!is.na(meld))
+  N <- nrow(dd)
+
+  bin_w <- 5
+  breaks <- seq(
+    floor(min(dd$meld)/bin_w)*bin_w,
+    ceiling(max(dd$meld)/bin_w)*bin_w + bin_w,
+    by = bin_w
+  )
+
+  dd <- dd %>%
+    mutate(meld_bin = cut(meld, breaks = breaks, right = FALSE, include.lowest = TRUE))
+
+  bin_counts <- dd %>%
+    count(meld_bin, group_label, name="n") %>%
+    group_by(meld_bin) %>%
+    mutate(ypos = cumsum(n) - n/2) %>%
+    ungroup()
+
+  ggplot(bin_counts, aes(x = meld_bin, y = n, fill = group_label)) +
+    geom_col(color = "white") +
+    geom_text(aes(y = ypos, label = ifelse(n>0, n, "")), size = 4) +
+    labs(
+      title = sprintf("MELD Histogram with binsize = %d (N=%d)", bin_w, N),
+      x = "MELD", y = "Frequency", fill = "Groups"
+    ) +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+}
+```

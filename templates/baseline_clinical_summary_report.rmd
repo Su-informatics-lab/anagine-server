@@ -1,0 +1,2010 @@
+---
+geometry: margin=1.7cm
+params:
+  meta_json: "{}"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    df_print: paged
+  pdf_document:
+    toc: false
+    fig_caption: yes
+    keep_tex: yes
+header-includes:
+  - \usepackage{float}
+  - \usepackage{booktabs}
+  - \usepackage{longtable}
+  - \usepackage{fancyhdr}
+  - \usepackage{lastpage}
+  - \setlength{\tabcolsep}{4pt}
+  - \renewcommand{\arraystretch}{1.08}
+  - \setlength{\headheight}{14pt}
+  - \pagestyle{fancy}
+  - \fancyhf{}
+  - \fancyhead[L]{ARDaC Anagine report}
+  - \fancyhead[R]{AlcHepNet ARDaC Anagine}
+  - \fancyfoot[C]{Page \thepage\ of \pageref{LastPage}}
+---
+
+```{r setup, include=FALSE}
+suppressPackageStartupMessages({
+  library(jsonlite)
+  library(dplyr)
+  library(knitr)
+  library(ggplot2)
+  library(tidyr)
+  library(survival)
+})
+
+knitr::opts_chunk$set(
+  echo = FALSE,
+  warning = FALSE,
+  message = FALSE,
+  fig.pos = "H"
+)
+
+meta <- tryCatch(jsonlite::fromJSON(params$meta_json, flatten = TRUE), error = function(e) list())
+requested_by <- if (!is.null(meta$requested_by)) as.character(meta$requested_by)[1] else ""
+if (is.na(requested_by) || requested_by == "") requested_by <- ""
+
+escape_latex_text <- function(x) {
+  if (length(x) == 0 || is.na(x) || x == "") return("")
+  x <- gsub("\\\\", "\\\\textbackslash{}", x)
+  x <- gsub("([#$%&_{}])", "\\\\\\1", x, perl = TRUE)
+  x <- gsub("~", "\\\\textasciitilde{}", x, fixed = TRUE)
+  x <- gsub("\\^", "\\\\textasciicircum{}", x, perl = TRUE)
+  x
+}
+
+df <- meta$fetchedData
+if (is.null(df) || length(df) == 0) {
+  df <- data.frame()
+} else if (is.list(df) && !is.data.frame(df)) {
+  df <- dplyr::bind_rows(df)
+} else {
+  df <- as.data.frame(df, stringsAsFactors = FALSE)
+}
+
+required_df_columns <- c(
+  "pat_id", "project_id", "cohort", "study_site", "study_name",
+  "actarm", "case_arm", "aki_status", "days_to_aki", "days_90_aki", "days_180_aki",
+  "vital_status", "days_to_death", "days_90_survival", "days_180_survival",
+  "age_at_index", "gender", "race", "ethnicity",
+  "drinking_frequency", "drinks_per_day",
+  "follow_up_id", "visit_day",
+  "bmi", "tlfb_number_drinks", "tlfb_drinking_days",
+  "meld_score", "child_pugh_score", "maddreys_score",
+  "alcohol_use_baseline",
+  "estimated_gfr_mdrd", "albumin", "total_bilirubin", "direct_bilirubin",
+  "creatinine", "alt", "ast", "alkaline_phosphatase", "total_protein",
+  "hemoglobin", "total_wbc", "platelet_count", "mcv", "inr", "pt_seconds"
+)
+
+missing_df_columns <- setdiff(required_df_columns, names(df))
+if (length(missing_df_columns) > 0) {
+  for (col in missing_df_columns) df[[col]] <- rep(NA, nrow(df))
+}
+df <- df[, unique(c(required_df_columns, names(df))), drop = FALSE]
+
+field_availability <- meta$fieldAvailability
+if (is.null(field_availability) || length(field_availability) == 0) {
+  field_availability <- data.frame()
+} else if (is.list(field_availability) && !is.data.frame(field_availability)) {
+  field_availability <- dplyr::bind_rows(field_availability)
+} else {
+  field_availability <- as.data.frame(field_availability, stringsAsFactors = FALSE)
+}
+
+unavailable_fields <- meta$unavailableFields
+if (is.null(unavailable_fields) || length(unavailable_fields) == 0) unavailable_fields <- character()
+unavailable_fields <- as.character(unavailable_fields)
+unavailable_fields <- unavailable_fields[!is.na(unavailable_fields) & unavailable_fields != ""]
+
+biospecimen_summary <- meta$biospecimenSummary
+if (is.null(biospecimen_summary) || length(biospecimen_summary) == 0) {
+  biospecimen_summary <- list()
+}
+
+lab_result_summary <- meta$labResultSummary
+if (is.null(lab_result_summary) || length(lab_result_summary) == 0) {
+  lab_result_summary <- list()
+}
+
+participant_level_data <- meta$participantLevelData
+if (is.null(participant_level_data) || length(participant_level_data) == 0) {
+  participant_level_data <- data.frame()
+} else if (is.list(participant_level_data) && !is.data.frame(participant_level_data)) {
+  participant_level_data <- dplyr::bind_rows(participant_level_data)
+} else {
+  participant_level_data <- as.data.frame(participant_level_data, stringsAsFactors = FALSE)
+}
+
+`%||%` <- function(a, b) if (!is.null(a)) a else b
+
+generated_at <- as.character(meta$generated_at %||% "")
+if (length(generated_at) == 0 || is.na(generated_at[1]) || generated_at[1] == "") {
+  gt <- Sys.time()
+} else {
+  ga <- generated_at[1]
+  ga <- sub("Z$", "+0000", ga)
+  ga <- sub("([+-][0-9]{2}):([0-9]{2})$", "\\1\\2", ga)
+  gt <- as.POSIXct(ga, format = "%Y-%m-%dT%H:%M:%OS%z", tz = "UTC")
+  if (is.na(gt)) gt <- Sys.time()
+}
+
+report_month <- format(gt, "%B, %Y")
+report_date <- format(gt, "%B %d, %Y")
+gt_et <- as.POSIXct(format(gt, tz = "America/New_York", usetz = TRUE), tz = "America/New_York")
+report_time <- format(gt_et, "%I:%M %p %Z")
+run_info_generated_at <- paste(report_date, "at", report_time)
+
+source_index <- as.character(meta$filters$sourceIndex %||% "case")
+report_view <- as.character(meta$reportView %||% source_index)
+source_unit <- as.character(meta$sourceUnit %||% if (source_index == "follow_up") "follow-up rows" else if (source_index == "aliquot") "biospecimens" else if (source_index == "molecular_test") "lab results" else "participants")
+source_selected_count <- as.integer(meta$sourceSelectedCount %||% 0)
+source_total_match_count <- as.integer(meta$sourceTotalMatchCount %||% source_selected_count)
+source_fetched_row_count <- as.integer(meta$sourceFetchedRowCount %||% source_selected_count)
+source_was_truncated <- isTRUE(meta$sourceWasTruncated %||% FALSE)
+selected_count_label <- if (source_index == "aliquot") "Selected biospecimens" else if (source_index == "molecular_test") "Selected lab results" else if (source_index == "follow_up") "Selected follow-ups" else "Selected participants"
+matching_count_label <- if (source_index == "aliquot") "Matching biospecimens" else if (source_index == "molecular_test") "Matching lab results" else if (source_index == "follow_up") "Matching follow-ups" else "Matching participants"
+fetched_count_label <- if (source_index == "aliquot") "Fetched biospecimens" else if (source_index == "molecular_test") "Fetched lab results" else if (source_index == "follow_up") "Fetched follow-ups" else "Fetched participants"
+report_row_label <- if (source_index %in% c("aliquot", "molecular_test")) "Report follow-ups" else "Report rows"
+data_completeness_subject <- if (source_index == "aliquot") {
+  "all linked follow-up rows derived from the selected biospecimens"
+} else if (source_index == "molecular_test") {
+  "all linked follow-up rows derived from the selected lab results"
+} else if (source_index == "follow_up") {
+  "all selected follow-up rows"
+} else {
+  "all follow-up rows linked to the selected participants"
+}
+row_representation_sentence <- if (source_index == "aliquot") {
+  "Each row in this report represents one linked follow-up visit associated with the selected biospecimen cohort."
+} else if (source_index == "molecular_test") {
+  "Each row in this report represents one linked follow-up visit associated with the selected lab-result cohort."
+} else if (source_index == "follow_up") {
+  "Each row in this report represents one selected follow-up visit."
+} else {
+  "Each row in this report represents one follow-up visit linked to the selected participant cohort."
+}
+alcohol_table_caption <- if (source_index == "aliquot") {
+  "Alcohol use distribution across follow-up rows linked to the selected biospecimens."
+} else if (source_index == "molecular_test") {
+  "Alcohol use distribution across follow-up rows linked to the selected lab results."
+} else if (source_index == "follow_up") {
+  "Alcohol use distribution across all selected follow-up rows."
+} else {
+  "Alcohol use distribution across follow-up rows linked to the selected participants."
+}
+overall_summary_caption <- if (source_index == "aliquot") {
+  "Overall summary across follow-up rows linked to the selected biospecimens."
+} else if (source_index == "molecular_test") {
+  "Overall summary across follow-up rows linked to the selected lab results."
+} else if (source_index == "follow_up") {
+  "Overall summary across all selected follow-up rows."
+} else {
+  "Overall summary across follow-up rows linked to the selected participants."
+}
+metrics_caption <- if (source_index == "aliquot") {
+  "Summary of clinical measurements and laboratory values across follow-up rows linked to the selected biospecimens."
+} else if (source_index == "molecular_test") {
+  "Summary of clinical measurements and laboratory values across follow-up rows linked to the selected lab results."
+} else if (source_index == "follow_up") {
+  "Summary of clinical measurements and laboratory values across all selected follow-up rows."
+} else {
+  "Summary of clinical measurements and laboratory values across follow-up rows linked to the selected participants."
+}
+preview_core_caption <- if (source_index == "aliquot") {
+  "Example participant and biospecimen-linked follow-up records (first 10 rows)."
+} else if (source_index == "molecular_test") {
+  "Example participant and lab-result-linked follow-up records (first 10 rows)."
+} else if (source_index == "follow_up") {
+  "Example participant records from selected follow-up rows (first 10 rows)."
+} else {
+  "Example participant records linked to the selected participant cohort (first 10 rows)."
+}
+
+field_labels <- c(
+  age_at_index = "Age at index",
+  gender = "Sex",
+  race = "Race",
+  bmi = "BMI",
+  alcohol_use_baseline = "Alcohol use at visit",
+  tlfb_number_drinks = "Total drinks in prior 30 days",
+  tlfb_drinking_days = "Drinking days in prior 30 days",
+  meld_score = "MELD score",
+  child_pugh_score = "Child-Pugh score",
+  maddreys_score = "Maddrey discriminant function",
+  estimated_gfr_mdrd = "Estimated GFR",
+  albumin = "Serum albumin",
+  total_bilirubin = "Total bilirubin",
+  direct_bilirubin = "Direct bilirubin",
+  creatinine = "Serum creatinine",
+  alt = "ALT",
+  ast = "AST",
+  alkaline_phosphatase = "Alkaline phosphatase",
+  total_protein = "Total protein",
+  hemoglobin = "Hemoglobin",
+  total_wbc = "WBC",
+  platelet_count = "Platelets",
+  mcv = "MCV",
+  inr = "INR",
+  pt_seconds = "Prothrombin time"
+)
+
+numeric_fields <- c(
+  "age_at_index", "bmi", "tlfb_number_drinks", "tlfb_drinking_days",
+  "meld_score", "child_pugh_score", "maddreys_score", "estimated_gfr_mdrd",
+  "albumin", "total_bilirubin", "direct_bilirubin", "creatinine", "alt", "ast",
+  "alkaline_phosphatase", "total_protein", "hemoglobin", "total_wbc",
+  "platelet_count", "mcv", "inr", "pt_seconds"
+)
+
+short_project <- function(x) {
+  x <- as.character(x)
+  dplyr::case_when(
+    x == "ARDaC-AlcHepNet" ~ "AlcHepNet",
+    x == "ARDaC-Treat" ~ "Treat",
+    TRUE ~ x
+  )
+}
+
+short_site <- function(x) {
+  x <- as.character(x)
+  dplyr::case_when(
+    x == "Virginia Commonwealth University" ~ "VCU",
+    x == "University of Louisville" ~ "Louisville",
+    x == "Cleveland Clinic" ~ "Cleveland",
+    x == "Mayo Clinic" ~ "Mayo",
+    x == "Indiana University" ~ "Indiana",
+    x == "University of Pittsburgh" ~ "Pittsburgh",
+    TRUE ~ x
+  )
+}
+
+ensure_columns <- function(input_df, cols) {
+  if (is.null(input_df) || !is.data.frame(input_df)) {
+    input_df <- data.frame()
+  }
+  for (col in cols) {
+    if (!col %in% names(input_df)) {
+      input_df[[col]] <- rep(NA, nrow(input_df))
+    }
+  }
+  input_df
+}
+
+fmt_num <- function(x, digits = 1) {
+  x <- suppressWarnings(as.numeric(x))
+  x <- x[is.finite(x)]
+  if (length(x) == 0) return("NA")
+  format(round(mean(x), digits), nsmall = digits)
+}
+
+fmt_sd <- function(x, digits = 1) {
+  x <- suppressWarnings(as.numeric(x))
+  x <- x[is.finite(x)]
+  if (length(x) <= 1) return("NA")
+  format(round(stats::sd(x), digits), nsmall = digits)
+}
+
+fmt_median_iqr <- function(x, digits = 1) {
+  x <- suppressWarnings(as.numeric(x))
+  x <- x[is.finite(x)]
+  if (length(x) == 0) return("NA")
+  q <- stats::quantile(x, probs = c(0.25, 0.5, 0.75), na.rm = TRUE)
+  paste0(
+    format(round(q[[2]], digits), nsmall = digits),
+    " (",
+    format(round(q[[1]], digits), nsmall = digits),
+    ", ",
+    format(round(q[[3]], digits), nsmall = digits),
+    ")"
+  )
+}
+
+count_pct <- function(x) {
+  if (length(x) == 0) return(data.frame())
+  tab <- sort(table(x, useNA = "no"), decreasing = TRUE)
+  tab <- tab[tab > 0]
+  if (length(tab) == 0) return(data.frame())
+  data.frame(
+    Category = names(tab),
+    Count = as.integer(tab),
+    Percent = paste0(round(100 * as.integer(tab) / sum(tab), 1), "%"),
+    row.names = NULL,
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+  )
+}
+
+count_pct_from_summary <- function(items, value_col = "value", count_col = "count", label = "Category") {
+  if (is.null(items) || length(items) == 0) return(data.frame())
+  tbl <- if (is.data.frame(items)) items else dplyr::bind_rows(items)
+  if (nrow(tbl) == 0 || !(value_col %in% names(tbl)) || !(count_col %in% names(tbl))) return(data.frame())
+  total_n <- sum(as.numeric(tbl[[count_col]]), na.rm = TRUE)
+  out <- data.frame(
+    Category = as.character(tbl[[value_col]]),
+    Count = as.integer(tbl[[count_col]]),
+    Percent = if (total_n > 0) paste0(round(100 * as.numeric(tbl[[count_col]]) / total_n, 1), "%") else "0%",
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+  )
+  names(out)[1] <- label
+  out
+}
+
+render_table <- function(tbl, caption, align = NULL) {
+  fmt <- if (knitr::is_latex_output()) "latex" else "html"
+  args <- list(
+    x = tbl,
+    format = fmt,
+    caption = caption,
+    align = align,
+    booktabs = knitr::is_latex_output(),
+    longtable = knitr::is_latex_output(),
+    row.names = FALSE
+  )
+  out <- do.call(knitr::kable, args)
+  if (knitr::is_latex_output()) {
+    out <- paste0("\\begingroup\\small\n", out, "\n\\endgroup\n")
+  }
+  cat(out)
+  invisible(NULL)
+}
+
+run_info_metrics <- c(
+  "Generated at",
+  "Linked participants",
+  "Linked follow-ups",
+  report_row_label
+)
+
+run_info_values <- c(
+  run_info_generated_at,
+  as.character(meta$participantCount %||% 0),
+  as.character(meta$followUpCount %||% 0),
+  as.character(meta$fetchedCount %||% 0)
+)
+
+if (source_was_truncated) {
+  run_info_metrics <- append(run_info_metrics, c(matching_count_label, fetched_count_label), after = 1)
+  run_info_values <- append(run_info_values, c(as.character(source_total_match_count), as.character(source_fetched_row_count)), after = 1)
+} else {
+  run_info_metrics <- append(run_info_metrics, selected_count_label, after = 1)
+  run_info_values <- append(run_info_values, as.character(source_selected_count), after = 1)
+}
+
+kernel_value <- as.character(meta$kernel %||% "")
+if (length(kernel_value) > 0 && !is.na(kernel_value[1])) {
+  kernel_value <- trimws(kernel_value[1])
+} else {
+  kernel_value <- ""
+}
+
+if (nzchar(kernel_value) && toupper(kernel_value) != "UNKNOWN") {
+  run_info_metrics <- append(run_info_metrics, "Kernel", after = 1)
+  run_info_values <- append(run_info_values, kernel_value, after = 1)
+}
+
+run_info <- data.frame(
+  Metric = run_info_metrics,
+  Value = run_info_values,
+  stringsAsFactors = FALSE,
+  check.names = FALSE
+)
+
+truncation_note <- NULL
+if (source_was_truncated) {
+  truncation_note <- if (source_index == "aliquot") {
+    paste0(
+      "The selected biospecimen cohort matches ", source_total_match_count,
+      " rows in Explorer, but the current detailed query returned ", source_fetched_row_count,
+      " rows. The linked summaries in this report are therefore based on the first ",
+      source_fetched_row_count, " biospecimen rows returned by Guppy."
+    )
+  } else if (source_index == "molecular_test") {
+    paste0(
+      "The selected lab-result cohort matches ", source_total_match_count,
+      " rows in Explorer, but the current detailed query returned ", source_fetched_row_count,
+      " rows. The linked summaries in this report are therefore based on the first ",
+      source_fetched_row_count, " lab-result rows returned by Guppy."
+    )
+  } else {
+    paste0(
+      "The selected cohort matches ", source_total_match_count,
+      " rows in Explorer, but the current detailed query returned ", source_fetched_row_count,
+      " rows. The report is based on the fetched subset."
+    )
+  }
+}
+
+filters <- meta$filters$sourceFilters
+filter_table <- data.frame()
+if (!is.null(filters) && length(filters) > 0) {
+  to_vals <- function(x) {
+    if (is.list(x) && !is.null(x$selectedValues)) {
+      paste(x$selectedValues, collapse = ", ")
+    } else if (is.list(x) && (!is.null(x$lowerBound) || !is.null(x$upperBound))) {
+      paste0("[", x$lowerBound %||% "-inf", ", ", x$upperBound %||% "+inf", "]")
+    } else {
+      as.character(jsonlite::toJSON(x, auto_unbox = TRUE))
+    }
+  }
+
+  filter_table <- data.frame(
+    Field = names(filters),
+    Value = vapply(filters, to_vals, FUN.VALUE = character(1)),
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+  )
+}
+
+make_availability_table <- function(input_df, availability_override = NULL) {
+  if (!is.null(availability_override) && nrow(availability_override) > 0) {
+    override_df <- as.data.frame(availability_override, stringsAsFactors = FALSE)
+    required_cols <- c("field", "availableCount", "missingCount", "availablePercent")
+    if (all(required_cols %in% names(override_df))) {
+      override_df <- override_df %>% filter(!(field %in% unavailable_fields))
+      return(override_df %>%
+        mutate(
+          Field = ifelse(field %in% names(field_labels), unname(field_labels[field]), field),
+          `Available values` = suppressWarnings(as.numeric(availableCount)),
+          `Missing values` = suppressWarnings(as.numeric(missingCount)),
+          Coverage = paste0(`Available values`, "/", `Available values` + `Missing values`, " (", availablePercent, "%)")
+        ) %>%
+        select(Field, `Available values`, `Missing values`, Coverage))
+    }
+  }
+  if (nrow(input_df) == 0) return(data.frame())
+  expected_fields <- setdiff(intersect(names(field_labels), names(input_df)), unavailable_fields)
+  data.frame(
+    field = expected_fields,
+    stringsAsFactors = FALSE
+  ) %>%
+    rowwise() %>%
+    mutate(
+      availableCount = sum(!is.na(input_df[[field]]) & input_df[[field]] != ""),
+      missingCount = nrow(input_df) - availableCount,
+      availablePercent = if (nrow(input_df) > 0) round(100 * availableCount / nrow(input_df), 1) else 0
+    ) %>%
+    ungroup() %>%
+    mutate(
+      Field = ifelse(field %in% names(field_labels), unname(field_labels[field]), field),
+      `Available values` = availableCount,
+      `Missing values` = missingCount,
+      Coverage = paste0(availableCount, "/", availableCount + missingCount, " (", availablePercent, "%)")
+    ) %>%
+    select(Field, `Available values`, `Missing values`, Coverage)
+}
+
+make_metrics_table <- function(input_df) {
+  if (nrow(input_df) == 0) return(data.frame())
+  available_numeric <- setdiff(numeric_fields[numeric_fields %in% names(input_df)], unavailable_fields)
+  if (length(available_numeric) == 0) return(data.frame())
+  data.frame(
+    Field = ifelse(available_numeric %in% names(field_labels), unname(field_labels[available_numeric]), available_numeric),
+    `Mean (SD)` = vapply(available_numeric, function(col) {
+      paste0(fmt_num(input_df[[col]]), " (", fmt_sd(input_df[[col]]), ")")
+    }, FUN.VALUE = character(1)),
+    `Median (IQR)` = vapply(available_numeric, function(col) {
+      fmt_median_iqr(input_df[[col]])
+    }, FUN.VALUE = character(1)),
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+  )
+}
+
+make_overview_table <- function(input_df) {
+  if (nrow(input_df) == 0) return(data.frame())
+  data.frame(
+    Metric = c(
+      "Rows included",
+      "Unique participants",
+      "Visit days represented",
+      "BMI median (IQR)",
+      "MELD median (IQR)",
+      "Child-Pugh median (IQR)",
+      "Maddrey median (IQR)"
+    ),
+    Value = c(
+      nrow(input_df),
+      dplyr::n_distinct(input_df$pat_id),
+      paste(sort(unique(input_df$visit_day[is.finite(input_df$visit_day)])), collapse = ", "),
+      fmt_median_iqr(input_df$bmi),
+      fmt_median_iqr(input_df$meld_score),
+      fmt_median_iqr(input_df$child_pugh_score),
+      fmt_median_iqr(input_df$maddreys_score)
+    ),
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+  )
+}
+
+visit_label <- function(x) {
+  x_num <- suppressWarnings(as.numeric(x))
+  out <- rep("Unknown visit day", length(x_num))
+  finite_idx <- is.finite(x_num)
+  rounded <- x_num[finite_idx]
+  rounded[abs(rounded - round(rounded)) < 1e-9] <- round(rounded[abs(rounded - round(rounded)) < 1e-9])
+  out[finite_idx] <- paste0("Visit day ", rounded)
+  out
+}
+
+to_num_vec <- function(x) {
+  suppressWarnings(as.numeric(as.character(x)))
+}
+
+to_chr_vec <- function(x) {
+  trimws(as.character(x))
+}
+
+first_non_missing_num <- function(...) {
+  vals <- suppressWarnings(as.numeric(unlist(list(...), use.names = FALSE)))
+  vals <- vals[is.finite(vals)]
+  if (length(vals) == 0) return(NA_real_)
+  vals[[1]]
+}
+
+normalize_status <- function(x) {
+  trimws(tolower(as.character(x)))
+}
+
+preferred_group_order <- function(group_mode) {
+  switch(
+    group_mode,
+    sex = c("Female", "Male"),
+    obs_group = c("AH cases", "Heavy Drinking Controls", "Healthy Controls", "RCT patients"),
+    treatment_arm = c("OBS patients", "Anakinra + Zinc", "Prednisone"),
+    "All"
+  )
+}
+
+ordered_groups <- function(groups, group_mode) {
+  groups <- unique(as.character(groups))
+  preferred <- preferred_group_order(group_mode)
+  c(preferred[preferred %in% groups], sort(setdiff(groups, preferred)))
+}
+
+km_palette <- function(groups, group_mode) {
+  groups <- as.character(groups)
+  cols <- setNames(grDevices::hcl.colors(length(groups), "Dark 3"), groups)
+  overrides <- switch(
+    group_mode,
+    sex = c("Female" = "#2F8DE4", "Male" = "#F14B3A"),
+    obs_group = c("AH cases" = "#2F8DE4", "Heavy Drinking Controls" = "#6E63C6", "Healthy Controls" = "#4CAF50", "RCT patients" = "#F14B3A"),
+    treatment_arm = c("OBS patients" = "#2F8DE4", "Anakinra + Zinc" = "#F14B3A", "Prednisone" = "#4CAF50"),
+    c("All" = "#2F8DE4")
+  )
+  for (name in intersect(names(overrides), groups)) cols[[name]] <- overrides[[name]]
+  cols[groups]
+}
+
+build_participant_analysis_df <- function(input_df) {
+  if (nrow(input_df) == 0) return(data.frame())
+  input_df %>%
+    distinct(pat_id, .keep_all = TRUE) %>%
+    mutate(
+      project_short = short_project(project_id),
+      cohort_clean = ifelse(is.na(cohort) | trimws(cohort) == "", NA_character_, trimws(as.character(cohort))),
+      case_arm_clean = dplyr::coalesce(
+        dplyr::na_if(trimws(as.character(case_arm)), ""),
+        dplyr::na_if(trimws(as.character(actarm)), "")
+      ),
+      case_arm_clean = dplyr::case_when(
+        case_arm_clean %in% c("Anakinra + Zinc", "Prednisone") ~ case_arm_clean,
+        TRUE ~ NA_character_
+      ),
+      obs_group = dplyr::case_when(
+        project_short == "Treat" ~ "RCT patients",
+        cohort_clean %in% c("AH cases", "Heavy Drinking Controls", "Healthy Controls") ~ cohort_clean,
+        TRUE ~ NA_character_
+      ),
+      treatment_arm_group = dplyr::case_when(
+        !is.na(case_arm_clean) ~ case_arm_clean,
+        project_short == "AlcHepNet" ~ "OBS patients",
+        TRUE ~ NA_character_
+      ),
+      sex_group = dplyr::case_when(
+        trimws(as.character(gender)) %in% c("Female", "Male") ~ trimws(as.character(gender)),
+        TRUE ~ NA_character_
+      )
+    )
+}
+
+prepare_km_df <- function(input_df, outcome = c("death", "aki"), group_mode = c("none", "sex", "obs_group", "treatment_arm"), horizon = 180) {
+  outcome <- match.arg(outcome)
+  group_mode <- match.arg(group_mode)
+  if (nrow(input_df) == 0) return(data.frame())
+
+  death_time_raw <- to_num_vec(input_df$days_to_death)
+  death_censor <- dplyr::coalesce(to_num_vec(input_df$days_180_survival), to_num_vec(input_df$days_90_survival), rep(horizon, nrow(input_df)))
+  death_status <- normalize_status(input_df$vital_status)
+  death_event_raw <- death_status %in% c("dead", "deceased")
+
+  aki_time_raw <- to_num_vec(input_df$days_to_aki)
+  aki_censor <- dplyr::coalesce(to_num_vec(input_df$days_180_aki), to_num_vec(input_df$days_90_aki), rep(horizon, nrow(input_df)))
+  aki_status <- normalize_status(input_df$aki_status)
+  aki_event_raw <- aki_status %in% c("yes", "y", "positive", "1", "true")
+
+  if (outcome == "death") {
+    event_time <- death_time_raw
+    censor_time <- death_censor
+    event_raw <- death_event_raw
+  } else {
+    event_time <- aki_time_raw
+    censor_time <- aki_censor
+    event_raw <- aki_event_raw
+  }
+
+  observed_time <- dplyr::coalesce(
+    ifelse(is.finite(event_time) & event_time >= 0, event_time, NA_real_),
+    censor_time
+  )
+  time <- pmin(pmax(observed_time, 0), horizon)
+  event <- ifelse(
+    event_raw & is.finite(event_time) & event_time >= 0 & event_time <= horizon,
+    1L,
+    0L
+  )
+
+  group_label <- switch(
+    group_mode,
+    none = rep("All", nrow(input_df)),
+    sex = input_df$sex_group,
+    obs_group = input_df$obs_group,
+    treatment_arm = input_df$treatment_arm_group
+  )
+
+  out <- data.frame(
+    pat_id = as.character(input_df$pat_id),
+    time = as.numeric(time),
+    event = as.integer(event),
+    group_label = group_label,
+    stringsAsFactors = FALSE
+  ) %>%
+    filter(!is.na(pat_id), pat_id != "", is.finite(time), time >= 0, !is.na(group_label), group_label != "") %>%
+    distinct(pat_id, .keep_all = TRUE)
+
+  if (nrow(out) == 0) return(out)
+
+  group_levels <- ordered_groups(unique(out$group_label), group_mode)
+  out$group_label <- factor(out$group_label, levels = group_levels)
+  out
+}
+
+has_km_groups <- function(km_df, min_groups = 1) {
+  if (nrow(km_df) == 0) return(FALSE)
+  dplyr::n_distinct(km_df$group_label) >= min_groups
+}
+
+plot_km_panel <- function(km_df, group_mode = "none", horizon = 180) {
+  if (nrow(km_df) == 0) {
+    plot.new()
+    text(0.5, 0.5, "No analyzable participants were available for this survival analysis.")
+    return(invisible(NULL))
+  }
+
+  fit <- survival::survfit(survival::Surv(time, event) ~ group_label, data = km_df)
+  groups <- levels(km_df$group_label)
+  cols <- km_palette(groups, group_mode)
+  tick_times <- seq(0, horizon, by = 30)
+  risk_counts <- do.call(
+    rbind,
+    lapply(groups, function(group_name) {
+      sapply(tick_times, function(t) {
+        sum(km_df$group_label == group_name & km_df$time >= t)
+      })
+    })
+  )
+  event_counts <- do.call(
+    rbind,
+    lapply(groups, function(group_name) {
+      sapply(tick_times, function(t) {
+        sum(km_df$group_label == group_name & km_df$event == 1 & km_df$time <= t)
+      })
+    })
+  )
+  rownames(risk_counts) <- groups
+  rownames(event_counts) <- groups
+
+  op <- par(no.readonly = TRUE)
+  on.exit(par(op), add = TRUE)
+  layout(matrix(c(1, 2, 3), nrow = 3), heights = c(4.1, 0.85, max(2.2, 1.15 + 0.9 * length(groups))))
+
+  par(mar = c(4.5, 5.8, 6.6, 1.3), ps = 13.5, cex.axis = 1.12, cex.lab = 1.15, cex.main = 1.22, mgp = c(2.3, 0.8, 0))
+  plot(
+    fit,
+    col = cols,
+    lwd = 2,
+    lty = 1,
+    mark.time = FALSE,
+    xlim = c(0, horizon),
+    ylim = c(0, 1),
+    xaxs = "i",
+    yaxs = "i",
+    xaxt = "n",
+    conf.int = FALSE,
+    xlab = "Time (days)",
+    ylab = "Event-free Survival Probability",
+    main = "",
+    sub = ""
+  )
+  axis(1, at = tick_times, labels = tick_times, cex.axis = 1.12)
+  title(
+    main = "Kaplan-Meier Estimate of Survival Function",
+    cex.main = 1.22,
+    font.main = 2,
+    line = 3.1
+  )
+  mtext(
+    "With Number of Subjects at Risk and Cumulative Events",
+    side = 3,
+    line = 1.55,
+    cex = 1.0,
+    col = "#6b7280",
+    font = 1
+  )
+  abline(h = seq(0, 1, by = 0.25), v = tick_times, col = "#d0d7de", lty = 3)
+  for (group_name in groups) {
+    group_rows <- km_df %>% filter(group_label == group_name)
+    censor_times <- sort(group_rows$time[group_rows$event == 0])
+    if (length(censor_times) == 0) next
+    fit_single <- survival::survfit(survival::Surv(time, event) ~ 1, data = group_rows)
+    censor_surv <- summary(fit_single, times = censor_times, extend = TRUE)$surv
+    points(
+      censor_times,
+      censor_surv,
+      pch = 3,
+      cex = 1.75,
+      lwd = 2.8,
+      col = cols[[group_name]]
+    )
+  }
+  legend(
+    "topright",
+    legend = "Censored",
+    pch = 3,
+    pt.cex = 1.75,
+    col = "#6b7280",
+    text.col = "#4b5563",
+    bty = "o",
+    bg = "#ffffff",
+    box.col = "#d9dbe3",
+    y.intersp = 0.9,
+    x.intersp = 0.5,
+    cex = 1.04
+  )
+
+  par(mar = c(0, 1, 0, 1))
+  plot.new()
+  legend(
+    "center",
+    legend = groups,
+    col = cols,
+    lwd = 2,
+    lty = 1,
+    pch = 1,
+    pt.cex = 1.08,
+    bty = "n",
+    horiz = length(groups) <= 3,
+    ncol = if (length(groups) > 3) 2 else length(groups),
+    xpd = NA,
+    cex = 1.14
+  )
+
+  row_step <- 1.08
+  header_block <- 1.9
+  top_y <- length(groups) * row_step * 2 + header_block + 0.8
+  par(mar = c(0.2, 8.5, 0.5, 1.5))
+  plot.new()
+  plot.window(xlim = c(-55, horizon), ylim = c(0, top_y))
+  header_title_y <- top_y - 0.45
+  header_ticks_y <- top_y - 1.15
+  first_risk_y <- top_y - header_block - 0.5
+  text(mean(range(tick_times)), header_title_y, "Time (days)", cex = 1.12, font = 2, col = "#374151")
+  text(tick_times, rep(header_ticks_y, length(tick_times)), labels = tick_times, cex = 1.12, col = "#374151")
+  for (i in seq_along(groups)) {
+    y_risk <- first_risk_y - (i - 1) * row_step * 2
+    y_event <- y_risk - row_step
+    text(-6, y_risk, paste0(groups[[i]], " (At Risk)"), adj = 1, col = cols[[i]], cex = 1.14, xpd = NA)
+    text(-6, y_event, "(Events)", adj = 1, col = "#6b7280", cex = 1.12, xpd = NA)
+    text(tick_times, rep(y_risk, length(tick_times)), labels = risk_counts[groups[[i]], ], cex = 1.14, col = "#374151")
+    text(tick_times, rep(y_event, length(tick_times)), labels = event_counts[groups[[i]], ], cex = 1.14, col = "#6b7280")
+  }
+}
+
+participant_level_required_columns <- c(
+  "pat_id", "project_id", "cohort", "study_site", "study_name",
+  "age_at_index", "gender", "race", "ethnicity",
+  "drinking_frequency", "drinks_per_day",
+  "actarm", "case_arm", "aki_status", "days_to_aki", "days_90_aki", "days_180_aki",
+  "vital_status", "days_to_death", "days_90_survival", "days_180_survival"
+)
+participant_level_data <- ensure_columns(participant_level_data, participant_level_required_columns)
+
+participant_df <- data.frame()
+if (nrow(df) > 0) {
+  participant_df <- df %>%
+    arrange(pat_id, visit_day, follow_up_id) %>%
+    group_by(pat_id) %>%
+    slice(1) %>%
+    ungroup()
+}
+
+participant_analysis_df <- if (nrow(participant_level_data) > 0) participant_level_data else participant_df
+participant_analysis_df <- build_participant_analysis_df(participant_analysis_df)
+show_participant_km <- identical(source_index, "case") || identical(report_view, "participants")
+
+km_death_all_df <- if (show_participant_km) prepare_km_df(participant_analysis_df, outcome = "death", group_mode = "none") else data.frame()
+km_death_sex_df <- if (show_participant_km) prepare_km_df(participant_analysis_df, outcome = "death", group_mode = "sex") else data.frame()
+km_death_obs_group_df <- if (show_participant_km) prepare_km_df(participant_analysis_df, outcome = "death", group_mode = "obs_group") else data.frame()
+km_death_treatment_df <- if (show_participant_km) prepare_km_df(participant_analysis_df, outcome = "death", group_mode = "treatment_arm") else data.frame()
+km_aki_all_df <- if (show_participant_km) prepare_km_df(participant_analysis_df, outcome = "aki", group_mode = "none") else data.frame()
+km_aki_obs_group_df <- if (show_participant_km) prepare_km_df(participant_analysis_df, outcome = "aki", group_mode = "obs_group") else data.frame()
+km_aki_treatment_df <- if (show_participant_km) prepare_km_df(participant_analysis_df, outcome = "aki", group_mode = "treatment_arm") else data.frame()
+km_aki_sex_df <- if (show_participant_km) prepare_km_df(participant_analysis_df, outcome = "aki", group_mode = "sex") else data.frame()
+
+availability_table <- make_availability_table(df, field_availability)
+overall_summary <- make_overview_table(df)
+participant_summary <- data.frame()
+if (nrow(participant_analysis_df) > 0) {
+  participant_summary <- data.frame(
+    Metric = c(
+      "Unique participants",
+      "Age mean (SD)",
+      "Age median (IQR)"
+    ),
+    Value = c(
+      nrow(participant_analysis_df),
+      paste0(fmt_num(participant_analysis_df$age_at_index), " (", fmt_sd(participant_analysis_df$age_at_index), ")"),
+      fmt_median_iqr(participant_analysis_df$age_at_index)
+    ),
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+  )
+}
+
+sex_table <- if ("gender" %in% names(participant_analysis_df)) count_pct(participant_analysis_df$gender) else data.frame()
+race_table <- if ("race" %in% names(participant_analysis_df)) count_pct(participant_analysis_df$race) else data.frame()
+alcohol_table <- if ("alcohol_use_baseline" %in% names(df)) count_pct(df$alcohol_use_baseline) else data.frame()
+
+metrics_table <- make_metrics_table(df)
+
+visit_groups <- list()
+visit_group_keys <- c()
+if (nrow(df) > 0) {
+  df <- df %>%
+    mutate(
+      visit_day_num = suppressWarnings(as.numeric(visit_day)),
+      visit_group = ifelse(is.finite(visit_day_num), as.character(visit_day_num), "Unknown")
+    )
+  visit_group_keys <- unique(df$visit_group)
+  visit_group_keys <- visit_group_keys[order(suppressWarnings(as.numeric(visit_group_keys)), na.last = TRUE)]
+  visit_groups <- lapply(visit_group_keys, function(key) df[df$visit_group == key, , drop = FALSE])
+  names(visit_groups) <- visit_group_keys
+}
+
+visit_day_levels <- visit_group_keys
+
+alcohol_plot_df <- data.frame()
+alcohol_single_visit_df <- data.frame()
+alcohol_active_visits <- 0
+alcohol_plot_caption <- "Alcohol use distribution across visit days. Bars show the number of follow-up rows classified as Yes or No at each visit day."
+if (nrow(df) > 0 && "alcohol_use_baseline" %in% names(df)) {
+  alcohol_plot_df <- df %>%
+    filter(!is.na(visit_day_num), !is.na(alcohol_use_baseline), alcohol_use_baseline != "") %>%
+    mutate(
+      visit_day_label = factor(visit_label(visit_day_num), levels = visit_label(as.numeric(visit_day_levels))),
+      alcohol_use_baseline = factor(alcohol_use_baseline, levels = c("No", "Yes"))
+    ) %>%
+    count(visit_day_label, alcohol_use_baseline, name = "n") %>%
+    ungroup()
+  alcohol_active_visits <- dplyr::n_distinct(alcohol_plot_df$visit_day_label)
+  if (alcohol_active_visits == 1) {
+    alcohol_single_visit_df <- alcohol_plot_df %>%
+      group_by(alcohol_use_baseline) %>%
+      summarise(n = sum(n), .groups = "drop") %>%
+      mutate(alcohol_use_baseline = factor(alcohol_use_baseline, levels = c("Yes", "No")))
+    alcohol_plot_caption <- "Alcohol use distribution within the selected follow-up cohort. Bars show the number of follow-up rows classified as Yes or No."
+  }
+}
+
+boxplot_df <- data.frame()
+boxplot_plot_df <- data.frame()
+boxplot_active_visits <- 0
+boxplot_single_visit_df <- data.frame()
+boxplot_caption <- "Distribution of selected clinical measures across visit days. Boxplots summarize the distribution of follow-up rows at each visit day. Extreme BMI outliers above the 99th percentile are omitted from the plot to improve readability."
+if (nrow(df) > 0) {
+  boxplot_fields <- intersect(c("meld_score", "bmi"), names(df))
+  if (length(boxplot_fields) > 0) {
+    boxplot_df <- df %>%
+      filter(!is.na(visit_day_num)) %>%
+      mutate(visit_day_label = factor(visit_label(visit_day_num), levels = visit_label(as.numeric(visit_day_levels)))) %>%
+      select(visit_day_label, all_of(boxplot_fields)) %>%
+      pivot_longer(cols = all_of(boxplot_fields), names_to = "metric", values_to = "value") %>%
+      filter(!is.na(value)) %>%
+      mutate(metric = recode(metric, meld_score = "MELD score", bmi = "BMI"))
+    boxplot_plot_df <- boxplot_df
+    if (any(boxplot_plot_df$metric == "BMI")) {
+      bmi_upper <- stats::quantile(boxplot_plot_df$value[boxplot_plot_df$metric == "BMI"], probs = 0.99, na.rm = TRUE)
+      boxplot_plot_df <- boxplot_plot_df %>%
+        filter(metric != "BMI" | value <= bmi_upper)
+    }
+    boxplot_active_visits <- dplyr::n_distinct(boxplot_plot_df$visit_day_label)
+    if (boxplot_active_visits == 1) {
+      boxplot_single_visit_df <- boxplot_plot_df %>%
+        mutate(metric = factor(metric, levels = c("BMI", "MELD score")))
+      boxplot_caption <- "Distribution of selected clinical measures within the selected follow-up cohort. Extreme BMI outliers above the 99th percentile are omitted from the plot to improve readability."
+    }
+  }
+}
+
+trend_df <- data.frame()
+trend_active_visits <- 0
+if (nrow(df) > 0) {
+  trend_fields <- intersect(c("meld_score", "child_pugh_score"), names(df))
+  if (length(trend_fields) > 0) {
+    trend_df <- df %>%
+      filter(!is.na(visit_day_num)) %>%
+      select(visit_day_num, all_of(trend_fields)) %>%
+      pivot_longer(cols = all_of(trend_fields), names_to = "metric", values_to = "value") %>%
+      filter(!is.na(value)) %>%
+      group_by(visit_day_num, metric) %>%
+      summarise(
+        median = median(value, na.rm = TRUE),
+        q1 = quantile(value, 0.25, na.rm = TRUE),
+        q3 = quantile(value, 0.75, na.rm = TRUE),
+        .groups = "drop"
+      ) %>%
+      mutate(metric = recode(metric, meld_score = "MELD score", child_pugh_score = "Child-Pugh score"))
+    trend_active_visits <- dplyr::n_distinct(trend_df$visit_day_num)
+  }
+}
+
+lab_heatmap_df <- data.frame()
+lab_heatmap_active_visits <- 0
+if (nrow(df) > 0) {
+  lab_fields <- intersect(c(
+    "estimated_gfr_mdrd", "albumin", "total_bilirubin", "direct_bilirubin", "creatinine",
+    "alt", "ast", "alkaline_phosphatase", "total_protein", "hemoglobin",
+    "total_wbc", "platelet_count", "mcv", "inr", "pt_seconds"
+  ), names(df))
+  if (length(lab_fields) > 0) {
+    lab_heatmap_df <- df %>%
+      filter(!is.na(visit_day_num)) %>%
+      mutate(visit_day_label = factor(visit_label(visit_day_num), levels = visit_label(as.numeric(visit_day_levels)))) %>%
+      select(visit_day_label, all_of(lab_fields)) %>%
+      pivot_longer(cols = all_of(lab_fields), names_to = "field", values_to = "value") %>%
+      group_by(field, visit_day_label) %>%
+      summarise(coverage = mean(!is.na(value)) * 100, .groups = "drop") %>%
+      mutate(field = ifelse(field %in% names(field_labels), unname(field_labels[field]), field))
+    lab_heatmap_active_visits <- dplyr::n_distinct(lab_heatmap_df$visit_day_label[lab_heatmap_df$coverage > 0])
+  }
+}
+
+sex_trend_df <- data.frame()
+sex_trend_active_visits <- 0
+sex_trend_active_groups <- 0
+if (nrow(df) > 0 && all(c("visit_day_num", "gender", "meld_score") %in% names(df))) {
+  sex_trend_df <- df %>%
+    filter(!is.na(visit_day_num), !is.na(gender), gender != "", !is.na(meld_score)) %>%
+    group_by(visit_day_num, gender) %>%
+    summarise(
+      median = median(meld_score, na.rm = TRUE),
+      q1 = quantile(meld_score, 0.25, na.rm = TRUE),
+      q3 = quantile(meld_score, 0.75, na.rm = TRUE),
+      .groups = "drop"
+    )
+  sex_trend_active_visits <- dplyr::n_distinct(sex_trend_df$visit_day_num)
+  sex_trend_active_groups <- dplyr::n_distinct(sex_trend_df$gender)
+}
+
+show_followup_study_plots <- identical(source_index, "follow_up") || identical(report_view, "follow_ups")
+
+followup_metric_specs <- list(
+  meld_score = list(
+    title = "MELD Score",
+    y_label = "meld_score"
+  ),
+  child_pugh_score = list(
+    title = "Child-Pugh Score",
+    y_label = "child_pugh_score"
+  ),
+  maddreys_score = list(
+    title = "Maddrey's Discriminant Function Score",
+    y_label = "maddreys_score"
+  )
+)
+
+followup_trial_palette <- c(
+  "Prednisone" = "#2F8DE4",
+  "Anakinra + Zinc" = "#69C36D"
+)
+
+followup_obs_palette <- c(
+  "Heavy Drinker without Alcoholic Hepatitis" = "#4C6FD3",
+  "Heavy Drinker with Alcoholic Hepatitis" = "#8BCF6B",
+  "Healthy Donor" = "#FDBA45"
+)
+
+normalize_followup_trial_arm <- function(case_arm, actarm) {
+  arm <- dplyr::coalesce(
+    dplyr::na_if(trimws(as.character(case_arm)), ""),
+    dplyr::na_if(trimws(as.character(actarm)), "")
+  )
+  dplyr::case_when(
+    arm %in% c("Prednisone", "Anakinra + Zinc") ~ arm,
+    TRUE ~ NA_character_
+  )
+}
+
+normalize_followup_obs_group <- function(cohort) {
+  cohort <- trimws(as.character(cohort))
+  dplyr::case_when(
+    cohort == "Heavy Drinking Controls" ~ "Heavy Drinker without Alcoholic Hepatitis",
+    cohort == "AH cases" ~ "Heavy Drinker with Alcoholic Hepatitis",
+    cohort == "Healthy Controls" ~ "Healthy Donor",
+    TRUE ~ NA_character_
+  )
+}
+
+prepare_followup_study_metric_df <- function(input_df, metric_name, study_type = c("trial", "observational")) {
+  study_type <- match.arg(study_type)
+  if (nrow(input_df) == 0 || !metric_name %in% names(input_df)) return(data.frame())
+
+  plot_df <- input_df %>%
+    mutate(
+      metric_value = suppressWarnings(as.numeric(.data[[metric_name]])),
+      project_short = short_project(project_id),
+      treatment_group = normalize_followup_trial_arm(case_arm, actarm),
+      obs_group_label = normalize_followup_obs_group(cohort)
+    ) %>%
+    filter(!is.na(visit_day_num), !is.na(metric_value), !is.na(pat_id), pat_id != "")
+
+  if (study_type == "trial") {
+    plot_df <- plot_df %>%
+      filter(!is.na(treatment_group)) %>%
+      mutate(
+        group_label = factor(treatment_group, levels = c("Prednisone", "Anakinra + Zinc"))
+      )
+  } else {
+    plot_df <- plot_df %>%
+      filter(!is.na(obs_group_label), is.na(treatment_group)) %>%
+      mutate(
+        group_label = factor(
+          obs_group_label,
+          levels = c(
+            "Heavy Drinker without Alcoholic Hepatitis",
+            "Heavy Drinker with Alcoholic Hepatitis",
+            "Healthy Donor"
+          )
+        )
+      )
+  }
+
+  if (nrow(plot_df) == 0) return(data.frame())
+
+  visit_levels <- sort(unique(plot_df$visit_day_num))
+  plot_df %>%
+    mutate(
+      visit_day_factor = factor(as.character(visit_day_num), levels = as.character(visit_levels))
+    ) %>%
+    arrange(group_label, pat_id, visit_day_num)
+}
+
+plot_followup_metric_boxplot <- function(plot_df, metric_title, study_title, y_label, palette) {
+  visit_breaks <- sort(unique(plot_df$visit_day_num))
+  ggplot(plot_df, aes(x = visit_day_factor, y = metric_value, fill = group_label)) +
+    geom_boxplot(
+      position = position_dodge(width = 0.78),
+      width = 0.68,
+      outlier.alpha = 0.18
+    ) +
+    scale_fill_manual(values = palette, drop = FALSE) +
+    labs(
+      title = paste(metric_title, study_title),
+      x = "Visit Days",
+      y = y_label,
+      fill = NULL
+    ) +
+    theme_minimal(base_size = 12) +
+    theme(
+      panel.grid.minor = element_blank(),
+      panel.grid.major.x = element_blank(),
+      plot.title = element_text(face = "bold", hjust = 0.5),
+      axis.title = element_text(face = "bold"),
+      axis.text.x = element_text(face = "bold"),
+      legend.position = "bottom",
+      legend.box = "horizontal"
+    ) +
+    guides(fill = guide_legend(nrow = if (length(palette) > 2) 2 else 1, byrow = TRUE))
+}
+
+plot_followup_metric_spaghetti <- function(plot_df, metric_title, study_title, y_label, palette) {
+  visit_breaks <- sort(unique(plot_df$visit_day_num))
+  ggplot(plot_df, aes(x = visit_day_num, y = metric_value, color = group_label, group = pat_id)) +
+    geom_line(alpha = 0.78, linewidth = 0.7) +
+    scale_color_manual(values = palette, drop = FALSE) +
+    scale_x_continuous(breaks = visit_breaks) +
+    labs(
+      title = paste(metric_title, study_title),
+      x = "Visit",
+      y = y_label,
+      color = NULL
+    ) +
+    theme_minimal(base_size = 12) +
+    theme(
+      panel.grid.minor = element_blank(),
+      plot.title = element_text(face = "bold", hjust = 0.5),
+      axis.title = element_text(face = "bold"),
+      legend.position = "bottom",
+      legend.box = "horizontal"
+    ) +
+    guides(color = guide_legend(nrow = if (length(palette) > 2) 2 else 1, byrow = TRUE))
+}
+
+followup_metric_plot_data <- list()
+if (show_followup_study_plots && nrow(df) > 0) {
+  for (metric_name in names(followup_metric_specs)) {
+    followup_metric_plot_data[[paste0(metric_name, "_trial")]] <- prepare_followup_study_metric_df(df, metric_name, study_type = "trial")
+    followup_metric_plot_data[[paste0(metric_name, "_obs")]] <- prepare_followup_study_metric_df(df, metric_name, study_type = "observational")
+  }
+}
+
+preview_core <- data.frame()
+preview_behavior <- data.frame()
+preview_scores <- data.frame()
+preview_labs <- data.frame()
+biospecimen_specimen_table <- data.frame()
+biospecimen_lab_table <- data.frame()
+biospecimen_per_participant <- data.frame()
+biospecimen_per_followup <- data.frame()
+biospecimen_preview <- data.frame()
+biospecimen_overview <- data.frame()
+lab_result_test_table <- data.frame()
+lab_result_unit_table <- data.frame()
+lab_result_lab_table <- data.frame()
+lab_result_per_participant <- data.frame()
+lab_result_per_followup <- data.frame()
+lab_result_preview <- data.frame()
+lab_result_overview <- data.frame()
+if (nrow(df) > 0) {
+  preview_core <- df %>%
+    transmute(
+      Participant = pat_id,
+      Project = short_project(project_id),
+      Site = short_site(study_site),
+      Age = age_at_index,
+      Sex = gender,
+      Race = race
+    ) %>%
+    utils::head(10)
+
+  preview_behavior <- df %>%
+    transmute(
+      Participant = pat_id,
+      `Alcohol use` = alcohol_use_baseline,
+      `Drinks (30d)` = tlfb_number_drinks,
+      `Days (30d)` = tlfb_drinking_days
+    ) %>%
+    utils::head(10)
+
+  preview_scores <- df %>%
+    transmute(
+      Participant = pat_id,
+      BMI = bmi,
+      MELD = meld_score,
+      `Child-Pugh` = child_pugh_score,
+      Maddrey = maddreys_score
+    ) %>%
+    utils::head(10)
+
+  preview_lab_cols <- intersect(
+    c("pat_id", "albumin", "creatinine", "total_bilirubin", "hemoglobin", "platelet_count", "inr", "pt_seconds"),
+    names(df)
+  )
+  preview_labs <- utils::head(df[, preview_lab_cols, drop = FALSE], 10)
+  lab_preview_labels <- c(
+    pat_id = "Participant",
+    albumin = "Albumin",
+    creatinine = "Creatinine",
+    total_bilirubin = "Total bilirubin",
+    hemoglobin = "Hemoglobin",
+    platelet_count = "Platelets",
+    inr = "INR",
+    pt_seconds = "PT"
+  )
+  names(preview_labs) <- unname(lab_preview_labels[names(preview_labs)])
+}
+
+if (source_index == "aliquot") {
+  biospecimen_specimen_table <- count_pct_from_summary(biospecimen_summary$specimenTypeCounts, label = "Specimen type")
+  biospecimen_lab_table <- count_pct_from_summary(biospecimen_summary$labCounts, label = "Lab")
+
+  if (!is.null(biospecimen_summary$biospecimensPerParticipant) && length(biospecimen_summary$biospecimensPerParticipant) > 0) {
+    biospecimen_per_participant <- if (is.data.frame(biospecimen_summary$biospecimensPerParticipant)) {
+      biospecimen_summary$biospecimensPerParticipant
+    } else {
+      dplyr::bind_rows(biospecimen_summary$biospecimensPerParticipant)
+    }
+  }
+
+  if (!is.null(biospecimen_summary$biospecimensPerFollowUp) && length(biospecimen_summary$biospecimensPerFollowUp) > 0) {
+    biospecimen_per_followup <- if (is.data.frame(biospecimen_summary$biospecimensPerFollowUp)) {
+      biospecimen_summary$biospecimensPerFollowUp
+    } else {
+      dplyr::bind_rows(biospecimen_summary$biospecimensPerFollowUp)
+    }
+  }
+
+  if (!is.null(biospecimen_summary$previewRows) && length(biospecimen_summary$previewRows) > 0) {
+    biospecimen_preview <- if (is.data.frame(biospecimen_summary$previewRows)) {
+      biospecimen_summary$previewRows
+    } else {
+      dplyr::bind_rows(biospecimen_summary$previewRows)
+    }
+  }
+
+  participant_dist <- suppressWarnings(as.numeric(biospecimen_per_participant$biospecimen_count))
+  followup_dist <- suppressWarnings(as.numeric(biospecimen_per_followup$biospecimen_count))
+  biospecimen_overview <- data.frame(
+    Metric = c(
+      "Selected biospecimens",
+      "Linked participants",
+      "Linked follow-up rows",
+      "Median biospecimens per linked participant",
+      "Median biospecimens per linked follow-up"
+    ),
+    Value = c(
+      source_selected_count,
+      meta$participantCount %||% 0,
+      meta$followUpCount %||% 0,
+      if (length(participant_dist) > 0) fmt_median_iqr(participant_dist, digits = 0) else "NA",
+      if (length(followup_dist) > 0) fmt_median_iqr(followup_dist, digits = 0) else "NA"
+    ),
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+  )
+
+  if (nrow(biospecimen_preview) > 0) {
+    biospecimen_preview <- ensure_columns(
+      biospecimen_preview,
+      c("aliquot_id", "specimen_type", "lab_name", "PI_name", "name_of_institute", "follow_up_id", "pat_id", "study_site")
+    )
+    biospecimen_preview <- biospecimen_preview %>%
+      transmute(
+        `Aliquot ID` = aliquot_id,
+        `Specimen type` = specimen_type,
+        Lab = coalesce(as.character(PI_name), as.character(lab_name), as.character(name_of_institute)),
+        `Follow-up ID` = follow_up_id,
+        Participant = pat_id,
+        Site = short_site(study_site)
+      ) %>%
+      utils::head(10)
+  }
+}
+
+if (source_index == "molecular_test") {
+  lab_result_test_table <- count_pct_from_summary(lab_result_summary$laboratoryTestCounts, label = "Laboratory test")
+  lab_result_unit_table <- count_pct_from_summary(lab_result_summary$unitCounts, label = "Unit")
+  lab_result_lab_table <- count_pct_from_summary(lab_result_summary$labCounts, label = "Lab")
+
+  if (!is.null(lab_result_summary$labResultsPerParticipant) && length(lab_result_summary$labResultsPerParticipant) > 0) {
+    lab_result_per_participant <- if (is.data.frame(lab_result_summary$labResultsPerParticipant)) {
+      lab_result_summary$labResultsPerParticipant
+    } else {
+      dplyr::bind_rows(lab_result_summary$labResultsPerParticipant)
+    }
+  }
+
+  if (!is.null(lab_result_summary$labResultsPerFollowUp) && length(lab_result_summary$labResultsPerFollowUp) > 0) {
+    lab_result_per_followup <- if (is.data.frame(lab_result_summary$labResultsPerFollowUp)) {
+      lab_result_summary$labResultsPerFollowUp
+    } else {
+      dplyr::bind_rows(lab_result_summary$labResultsPerFollowUp)
+    }
+  }
+
+  if (!is.null(lab_result_summary$previewRows) && length(lab_result_summary$previewRows) > 0) {
+    lab_result_preview <- if (is.data.frame(lab_result_summary$previewRows)) {
+      lab_result_summary$previewRows
+    } else {
+      dplyr::bind_rows(lab_result_summary$previewRows)
+    }
+  }
+
+  participant_dist <- suppressWarnings(as.numeric(lab_result_per_participant$lab_result_count))
+  followup_dist <- suppressWarnings(as.numeric(lab_result_per_followup$lab_result_count))
+  lab_result_overview <- data.frame(
+    Metric = c(
+      "Selected lab results",
+      "Linked participants",
+      "Linked follow-up rows",
+      "Median lab results per linked participant",
+      "Median lab results per linked follow-up"
+    ),
+    Value = c(
+      source_selected_count,
+      meta$participantCount %||% 0,
+      meta$followUpCount %||% 0,
+      if (length(participant_dist) > 0) fmt_median_iqr(participant_dist, digits = 0) else "NA",
+      if (length(followup_dist) > 0) fmt_median_iqr(followup_dist, digits = 0) else "NA"
+    ),
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+  )
+
+  if (nrow(lab_result_preview) > 0) {
+    lab_result_preview <- ensure_columns(
+      lab_result_preview,
+      c("molecular_test_id", "laboratory_test", "test_value", "test_unit", "lab_name", "PI_name", "name_of_institute", "follow_up_id", "pat_id", "study_site")
+    )
+    lab_result_preview <- lab_result_preview %>%
+      transmute(
+        `Lab Result ID` = molecular_test_id,
+        `Laboratory test` = laboratory_test,
+        Value = test_value,
+        Unit = test_unit,
+        Lab = coalesce(as.character(PI_name), as.character(lab_name), as.character(name_of_institute)),
+        `Follow-up ID` = follow_up_id,
+        Participant = pat_id,
+        Site = short_site(study_site)
+      ) %>%
+      utils::head(10)
+  }
+}
+```
+
+```{r cover_pdf, results='asis'}
+if (knitr::is_latex_output()) {
+  cat("\\thispagestyle{empty}\n")
+  cat("\\centering\n")
+  if (file.exists("AlcHepNet_logo.jpg")) {
+    cat("\\includegraphics[width=0.58\\textwidth]{AlcHepNet_logo.jpg}\n\n")
+  }
+  cat("\\begin{LARGE}\n")
+  cat("ARDaC Anagine report\n")
+  cat("\\end{LARGE}\n\n")
+  if (nzchar(requested_by)) {
+    cat("\\vspace{6pt}\n")
+    cat(sprintf("Report generated for %s\n\n", escape_latex_text(requested_by)))
+  }
+  cat("\\vspace{8pt}\n\\vspace{8pt}\n")
+  cat("\\begin{LARGE}\n")
+  cat(report_month)
+  cat("\n\\end{LARGE}\n\n")
+  cat("\\vspace{8pt}\n")
+  cat("\\begin{center}\n")
+  cat(sprintf("Data extracted %s at %s\n", report_date, report_time))
+  cat("\\end{center}\n")
+  cat("\\raggedright\n")
+  cat("\\clearpage\n\n")
+
+  cat("\\begingroup\n")
+  cat("\\renewcommand{\\contentsname}{Contents}\n")
+  cat("\\tableofcontents\n")
+  cat("\\vspace{18pt}\n")
+  cat("\\renewcommand{\\listtablename}{Tables}\n")
+  cat("\\listoftables\n")
+  cat("\\vspace{18pt}\n")
+  cat("\\renewcommand{\\listfigurename}{Figures}\n")
+  cat("\\listoffigures\n")
+  cat("\\endgroup\n")
+  cat("\\clearpage\n")
+}
+```
+
+```{r cover_html, results='asis'}
+if (knitr::is_html_output()) {
+  cat("# ARDaC Anagine report\n\n")
+  if (file.exists("AlcHepNet_logo.jpg")) {
+    cat("<div style='text-align:center;'>\n")
+    cat("<img src='AlcHepNet_logo.jpg' style='width:52%; max-width:520px;' />\n")
+    cat("</div>\n\n")
+  }
+  if (nzchar(requested_by)) {
+    cat(sprintf("Report generated for `%s`\n\n", requested_by))
+  }
+  cat(sprintf("**%s**  \n", report_month))
+  cat(sprintf("Data extracted %s at %s\n\n", report_date, report_time))
+}
+```
+
+## Run Info
+
+```{r, results='asis'}
+render_table(run_info, "Run information for this report.", align = "ll")
+```
+
+```{r, results='asis'}
+if (!is.null(truncation_note) && nzchar(truncation_note)) {
+  cat(paste0(truncation_note, "\n\n"))
+}
+```
+
+## Filters
+
+```{r, results='asis'}
+if (nrow(filter_table) == 0) {
+  cat("No source filters were provided. This report reflects all available records in the selected data source.\n")
+} else {
+  render_table(filter_table, "Explorer filters applied to build the report cohort.", align = "ll")
+}
+```
+
+```{r biospecimen_overview_section, results='asis'}
+if (source_index == "aliquot") {
+  cat("\n## Biospecimen Overview\n\n")
+
+  if (nrow(biospecimen_overview) > 0) {
+    render_table(biospecimen_overview, "Overview of the selected biospecimen cohort and its linked clinical context.", align = "ll")
+  }
+
+  if (nrow(biospecimen_specimen_table) > 0) {
+    cat("\n")
+    render_table(biospecimen_specimen_table, "Specimen-type distribution within the selected biospecimen cohort.", align = "lrr")
+  }
+
+  if (nrow(biospecimen_lab_table) > 0) {
+    cat("\n")
+    render_table(utils::head(biospecimen_lab_table, 12), "Laboratory distribution for the selected biospecimen cohort.", align = "lrr")
+  }
+
+  if (nrow(biospecimen_per_participant) > 0) {
+    part_summary <- data.frame(
+      Metric = c("Mean biospecimens per linked participant", "Median biospecimens per linked participant (IQR)", "Maximum biospecimens for one participant"),
+      Value = c(
+        paste0(fmt_num(biospecimen_per_participant$biospecimen_count, digits = 1)),
+        fmt_median_iqr(biospecimen_per_participant$biospecimen_count, digits = 0),
+        max(suppressWarnings(as.numeric(biospecimen_per_participant$biospecimen_count)), na.rm = TRUE)
+      ),
+      stringsAsFactors = FALSE,
+      check.names = FALSE
+    )
+    cat("\n")
+    render_table(part_summary, "Biospecimen counts aggregated at the linked-participant level.", align = "ll")
+  }
+
+  if (nrow(biospecimen_per_followup) > 0) {
+    followup_summary <- data.frame(
+      Metric = c("Mean biospecimens per linked follow-up", "Median biospecimens per linked follow-up (IQR)", "Maximum biospecimens for one follow-up"),
+      Value = c(
+        paste0(fmt_num(biospecimen_per_followup$biospecimen_count, digits = 1)),
+        fmt_median_iqr(biospecimen_per_followup$biospecimen_count, digits = 0),
+        max(suppressWarnings(as.numeric(biospecimen_per_followup$biospecimen_count)), na.rm = TRUE)
+      ),
+      stringsAsFactors = FALSE,
+      check.names = FALSE
+    )
+    cat("\n")
+    render_table(followup_summary, "Biospecimen counts aggregated at the linked follow-up level.", align = "ll")
+  }
+}
+```
+
+```{r lab_result_overview_section, results='asis'}
+if (source_index == "molecular_test") {
+  cat("\n## Lab Result Overview\n\n")
+
+  if (nrow(lab_result_overview) > 0) {
+    render_table(lab_result_overview, "Overview of the selected lab-result cohort and its linked clinical context.", align = "ll")
+  }
+
+  if (nrow(lab_result_test_table) > 0) {
+    cat("\n")
+    render_table(utils::head(lab_result_test_table, 12), "Laboratory-test distribution within the selected lab-result cohort.", align = "lrr")
+  }
+
+  if (nrow(lab_result_unit_table) > 0) {
+    cat("\n")
+    render_table(utils::head(lab_result_unit_table, 12), "Unit distribution within the selected lab-result cohort.", align = "lrr")
+  }
+
+  if (nrow(lab_result_lab_table) > 0) {
+    cat("\n")
+    render_table(utils::head(lab_result_lab_table, 12), "Lab distribution for the selected lab-result cohort.", align = "lrr")
+  }
+
+  if (nrow(lab_result_per_participant) > 0) {
+    part_summary <- data.frame(
+      Metric = c("Mean lab results per linked participant", "Median lab results per linked participant (IQR)", "Maximum lab results for one participant"),
+      Value = c(
+        paste0(fmt_num(lab_result_per_participant$lab_result_count, digits = 1)),
+        fmt_median_iqr(lab_result_per_participant$lab_result_count, digits = 0),
+        max(suppressWarnings(as.numeric(lab_result_per_participant$lab_result_count)), na.rm = TRUE)
+      ),
+      stringsAsFactors = FALSE,
+      check.names = FALSE
+    )
+    cat("\n")
+    render_table(part_summary, "Lab-result counts aggregated at the linked-participant level.", align = "ll")
+  }
+
+  if (nrow(lab_result_per_followup) > 0) {
+    followup_summary <- data.frame(
+      Metric = c("Mean lab results per linked follow-up", "Median lab results per linked follow-up (IQR)", "Maximum lab results for one follow-up"),
+      Value = c(
+        paste0(fmt_num(lab_result_per_followup$lab_result_count, digits = 1)),
+        fmt_median_iqr(lab_result_per_followup$lab_result_count, digits = 0),
+        max(suppressWarnings(as.numeric(lab_result_per_followup$lab_result_count)), na.rm = TRUE)
+      ),
+      stringsAsFactors = FALSE,
+      check.names = FALSE
+    )
+    cat("\n")
+    render_table(followup_summary, "Lab-result counts aggregated at the linked follow-up level.", align = "ll")
+  }
+}
+```
+
+## Data Completeness
+
+This section summarizes field coverage across `r data_completeness_subject`. `r row_representation_sentence`
+
+For numeric clinical fields, blank source values are treated as missing and are not recoded to zero. A low coverage percentage therefore indicates missing measurements, not true zero-valued observations.
+
+```{r, results='asis'}
+if (nrow(availability_table) == 0) {
+  cat("No field availability summary was provided.\n")
+} else {
+  render_table(availability_table, paste0("Field coverage across ", data_completeness_subject, "."), align = "lrrl")
+}
+```
+
+```{r, results='asis'}
+unavailable <- meta$unavailableFields
+if (!is.null(unavailable) && length(unavailable) > 0) {
+  label_unavailable <- ifelse(unavailable %in% names(field_labels), unname(field_labels[unavailable]), unavailable)
+  cat("Fields currently excluded from this report: ")
+  cat(paste(label_unavailable, collapse = ", "))
+  cat("\n")
+}
+```
+
+## Demographics
+
+```{r, results='asis'}
+if (nrow(participant_summary) == 0) {
+  cat("No participant summary is available.\n")
+} else {
+  render_table(participant_summary, "Participant-level overview.", align = "ll")
+}
+```
+
+### Sex
+
+```{r, results='asis'}
+if (nrow(sex_table) == 0) {
+  cat("No sex data available.\n")
+} else {
+  render_table(sex_table, "Sex distribution table.", align = "lrr")
+}
+```
+
+### Race
+
+```{r, results='asis'}
+if (nrow(race_table) == 0) {
+  cat("No race data available.\n")
+} else {
+  render_table(race_table, "Race distribution table.", align = "lrr")
+}
+```
+
+### Alcohol Use Over Follow-up
+
+```{r, results='asis'}
+if (nrow(alcohol_table) == 0) {
+  cat("No alcohol use data available.\n")
+} else {
+  render_table(alcohol_table, alcohol_table_caption, align = "lrr")
+}
+```
+
+## Overall Visit-Level Summary
+
+```{r, results='asis'}
+if (nrow(overall_summary) == 0) {
+  cat("No overall follow-up summary is available.\n")
+} else {
+  render_table(overall_summary, overall_summary_caption, align = "ll")
+}
+```
+
+Missing-value note: for numeric fields such as BMI and laboratory values, absent source values remain missing in this report. They are excluded from summary statistics and plots rather than being counted as zeros.
+
+```{r, results='asis'}
+if (nrow(metrics_table) == 0) {
+  cat("No overall follow-up metrics available.\n")
+} else {
+  render_table(metrics_table, metrics_caption, align = "lll")
+}
+```
+
+## Visual Summaries
+
+```{r, results='asis'}
+if (nrow(alcohol_plot_df) == 0) {
+  cat("_Alcohol-use figure omitted because no alcohol-use values were available in the selected cohort._\n\n")
+}
+if (nrow(boxplot_plot_df) == 0) {
+  cat("_Clinical-distribution figure omitted because no BMI or MELD values were available in the selected cohort._\n\n")
+}
+if (nrow(trend_df) > 0 && trend_active_visits <= 1) {
+  cat("_Median trend figure omitted because only one visit day is represented in the selected cohort. Trend comparisons require at least two visit days._\n\n")
+}
+if (nrow(sex_trend_df) > 0 && (sex_trend_active_visits <= 1 || sex_trend_active_groups <= 1)) {
+  cat("_Sex-stratified trend figure omitted because the selected cohort does not include both multiple visit days and multiple sex groups._\n\n")
+}
+if (nrow(lab_heatmap_df) > 0 && lab_heatmap_active_visits <= 1) {
+  cat("_Laboratory coverage heatmap omitted because laboratory coverage is present for only one visit day in the selected cohort._\n\n")
+}
+```
+
+```{r alcohol_visit_plot, fig.cap=alcohol_plot_caption, fig.width=8.5, fig.height=4.8, out.width='95%', fig.pos='H'}
+if (nrow(alcohol_plot_df) > 0) {
+  if (alcohol_active_visits > 1) {
+    ggplot(alcohol_plot_df, aes(x = visit_day_label, y = n, fill = alcohol_use_baseline)) +
+      geom_col(width = 0.72) +
+      scale_fill_manual(values = c("No" = "#d9d9d9", "Yes" = "#8c2d5d"), drop = FALSE) +
+      labs(x = "Visit day", y = "Number of follow-up rows", fill = "Alcohol use") +
+      theme_minimal(base_size = 11) +
+      theme(
+        panel.grid.minor = element_blank(),
+        axis.text.x = element_text(angle = 35, hjust = 1),
+        legend.position = "top"
+      )
+  } else {
+    ggplot(alcohol_single_visit_df, aes(x = alcohol_use_baseline, y = n, fill = alcohol_use_baseline)) +
+      geom_col(width = 0.62, show.legend = FALSE) +
+      geom_text(aes(label = n), hjust = -0.15, size = 3.8) +
+      coord_flip() +
+      scale_fill_manual(values = c("No" = "#d9d9d9", "Yes" = "#8c2d5d"), drop = FALSE) +
+      labs(x = NULL, y = "Number of follow-up rows") +
+      theme_minimal(base_size = 11) +
+      theme(
+        panel.grid.minor = element_blank(),
+        axis.text.y = element_text(face = "bold")
+      ) +
+      expand_limits(y = max(alcohol_single_visit_df$n, na.rm = TRUE) * 1.15)
+  }
+}
+```
+
+```{r visit_boxplots, fig.cap=boxplot_caption, fig.width=9, fig.height=5.6, out.width='98%', fig.pos='H'}
+if (nrow(boxplot_plot_df) > 0) {
+  if (boxplot_active_visits > 1) {
+    ggplot(boxplot_plot_df, aes(x = visit_day_label, y = value, fill = metric)) +
+      geom_boxplot(width = 0.72, outlier.alpha = 0.2, show.legend = FALSE) +
+      facet_wrap(~ metric, scales = "free_y", ncol = 1) +
+      labs(x = "Visit day", y = "Value") +
+      scale_fill_manual(values = c("MELD score" = "#8c2d5d", "BMI" = "#4575b4")) +
+      theme_minimal(base_size = 11) +
+      theme(
+        panel.grid.minor = element_blank(),
+        axis.text.x = element_text(angle = 35, hjust = 1),
+        strip.text = element_text(face = "bold")
+      )
+  } else {
+    ggplot(boxplot_single_visit_df, aes(x = metric, y = value, fill = metric)) +
+      geom_boxplot(width = 0.56, outlier.alpha = 0.2, show.legend = FALSE) +
+      scale_fill_manual(values = c("MELD score" = "#8c2d5d", "BMI" = "#4575b4")) +
+      labs(x = NULL, y = "Value") +
+      theme_minimal(base_size = 11) +
+      theme(panel.grid.minor = element_blank())
+  }
+}
+```
+
+```{r median_trend_plot, fig.cap="Median trend over follow-up visits for MELD score and Child-Pugh score. Error bars show the interquartile range.", fig.width=8.8, fig.height=4.8, out.width='96%', fig.pos='H'}
+if (nrow(trend_df) > 0 && trend_active_visits > 1) {
+  ggplot(trend_df, aes(x = visit_day_num, y = median, color = metric)) +
+    geom_line(linewidth = 0.9) +
+    geom_point(size = 2) +
+    geom_errorbar(aes(ymin = q1, ymax = q3), width = 3, alpha = 0.7) +
+    scale_color_manual(values = c("MELD score" = "#8c2d5d", "Child-Pugh score" = "#2b8cbe")) +
+    labs(x = "Visit day", y = "Median value", color = "Metric") +
+    theme_minimal(base_size = 11) +
+    theme(panel.grid.minor = element_blank(), legend.position = "top")
+}
+```
+
+```{r lab_heatmap, fig.cap="Coverage heatmap for laboratory fields across visit days. Darker cells indicate higher percent coverage among follow-up rows at that visit day.", fig.width=9.2, fig.height=6.2, out.width='98%', fig.pos='H'}
+if (nrow(lab_heatmap_df) > 0 && lab_heatmap_active_visits > 1) {
+  ggplot(lab_heatmap_df, aes(x = visit_day_label, y = field, fill = coverage)) +
+    geom_tile(color = "white", linewidth = 0.3) +
+    scale_fill_gradient(low = "#f7fbff", high = "#08306b", limits = c(0, 100), name = "Coverage %") +
+    labs(x = "Visit day", y = NULL) +
+    theme_minimal(base_size = 11) +
+    theme(
+      panel.grid = element_blank(),
+      axis.text.x = element_text(angle = 35, hjust = 1),
+      legend.position = "right"
+    )
+}
+```
+
+```{r sex_stratified_meld, fig.cap="Median MELD score across visit days, stratified by sex. Error bars show the interquartile range within each sex group.", fig.width=8.8, fig.height=4.8, out.width='96%', fig.pos='H'}
+if (nrow(sex_trend_df) > 0 && sex_trend_active_visits > 1 && sex_trend_active_groups > 1) {
+  ggplot(sex_trend_df, aes(x = visit_day_num, y = median, color = gender)) +
+    geom_line(linewidth = 0.9) +
+    geom_point(size = 2) +
+    geom_errorbar(aes(ymin = q1, ymax = q3), width = 3, alpha = 0.7) +
+      scale_color_manual(values = c("Male" = "#8c2d5d", "Female" = "#2b8cbe", "Unknown" = "#7f7f7f")) +
+      labs(x = "Visit day", y = "Median MELD score", color = "Sex") +
+      theme_minimal(base_size = 11) +
+      theme(panel.grid.minor = element_blank(), legend.position = "top")
+}
+```
+
+```{r followup_study_section_header, results='asis'}
+if (show_followup_study_plots) {
+  cat("## Follow-up Study-Specific Profiles\n\n")
+}
+```
+
+```{r followup_study_section_note, results='asis'}
+if (show_followup_study_plots) {
+  cat("These figures supplement the earlier overall follow-up summaries. They are study-specific views, so they intentionally overlap in topic with the generic MELD and trend plots above, but break the selected follow-up cohort into clinical-trial and observational-study strata.\n\n")
+}
+```
+
+```{r followup_study_messages, results='asis'}
+if (show_followup_study_plots) {
+  available_followup_plots <- sum(vapply(followup_metric_plot_data, function(x) is.data.frame(x) && nrow(x) > 0, logical(1)))
+  if (available_followup_plots == 0) {
+    cat("_Study-specific follow-up figures omitted because the selected follow-up cohort does not contain analyzable MELD, Child-Pugh, or Maddrey values split by trial/observational groups._\n\n")
+  }
+}
+```
+
+```{r followup_trial_meld_boxplot, fig.cap="MELD score distribution across visit days for the clinical-trial subset of the selected follow-up cohort.", fig.width=9.2, fig.height=5.2, out.width='98%', fig.pos='H'}
+plot_df <- followup_metric_plot_data[["meld_score_trial"]]
+if (show_followup_study_plots && is.data.frame(plot_df) && nrow(plot_df) > 0) {
+  plot_followup_metric_boxplot(plot_df, "MELD Score", "Clinical Trial", "meld_score", followup_trial_palette)
+}
+```
+
+```{r followup_trial_meld_spaghetti, fig.cap="Participant-level MELD score trajectories across visits for the clinical-trial subset of the selected follow-up cohort.", fig.width=9.2, fig.height=5.2, out.width='98%', fig.pos='H'}
+plot_df <- followup_metric_plot_data[["meld_score_trial"]]
+if (show_followup_study_plots && is.data.frame(plot_df) && nrow(plot_df) > 0) {
+  plot_followup_metric_spaghetti(plot_df, "MELD Score", "Clinical Trial", "meld_score", followup_trial_palette)
+}
+```
+
+```{r followup_obs_meld_boxplot, fig.cap="MELD score distribution across visit days for the observational-study subset of the selected follow-up cohort.", fig.width=9.2, fig.height=5.2, out.width='98%', fig.pos='H'}
+plot_df <- followup_metric_plot_data[["meld_score_obs"]]
+if (show_followup_study_plots && is.data.frame(plot_df) && nrow(plot_df) > 0) {
+  plot_followup_metric_boxplot(plot_df, "MELD Score", "Observational Study", "meld_score", followup_obs_palette)
+}
+```
+
+```{r followup_obs_meld_spaghetti, fig.cap="Participant-level MELD score trajectories across visits for the observational-study subset of the selected follow-up cohort.", fig.width=9.2, fig.height=5.2, out.width='98%', fig.pos='H'}
+plot_df <- followup_metric_plot_data[["meld_score_obs"]]
+if (show_followup_study_plots && is.data.frame(plot_df) && nrow(plot_df) > 0) {
+  plot_followup_metric_spaghetti(plot_df, "MELD Score", "Observational Study", "meld_score", followup_obs_palette)
+}
+```
+
+```{r followup_trial_child_boxplot, fig.cap="Child-Pugh score distribution across visit days for the clinical-trial subset of the selected follow-up cohort.", fig.width=9.2, fig.height=5.2, out.width='98%', fig.pos='H'}
+plot_df <- followup_metric_plot_data[["child_pugh_score_trial"]]
+if (show_followup_study_plots && is.data.frame(plot_df) && nrow(plot_df) > 0) {
+  plot_followup_metric_boxplot(plot_df, "Child-Pugh Score", "Clinical Trial", "child_pugh_score", followup_trial_palette)
+}
+```
+
+```{r followup_trial_child_spaghetti, fig.cap="Participant-level Child-Pugh score trajectories across visits for the clinical-trial subset of the selected follow-up cohort.", fig.width=9.2, fig.height=5.2, out.width='98%', fig.pos='H'}
+plot_df <- followup_metric_plot_data[["child_pugh_score_trial"]]
+if (show_followup_study_plots && is.data.frame(plot_df) && nrow(plot_df) > 0) {
+  plot_followup_metric_spaghetti(plot_df, "Child-Pugh Score", "Clinical Trial", "child_pugh_score", followup_trial_palette)
+}
+```
+
+```{r followup_obs_child_boxplot, fig.cap="Child-Pugh score distribution across visit days for the observational-study subset of the selected follow-up cohort.", fig.width=9.2, fig.height=5.2, out.width='98%', fig.pos='H'}
+plot_df <- followup_metric_plot_data[["child_pugh_score_obs"]]
+if (show_followup_study_plots && is.data.frame(plot_df) && nrow(plot_df) > 0) {
+  plot_followup_metric_boxplot(plot_df, "Child-Pugh Score", "Observational Study", "child_pugh_score", followup_obs_palette)
+}
+```
+
+```{r followup_obs_child_spaghetti, fig.cap="Participant-level Child-Pugh score trajectories across visits for the observational-study subset of the selected follow-up cohort.", fig.width=9.2, fig.height=5.2, out.width='98%', fig.pos='H'}
+plot_df <- followup_metric_plot_data[["child_pugh_score_obs"]]
+if (show_followup_study_plots && is.data.frame(plot_df) && nrow(plot_df) > 0) {
+  plot_followup_metric_spaghetti(plot_df, "Child-Pugh Score", "Observational Study", "child_pugh_score", followup_obs_palette)
+}
+```
+
+```{r followup_trial_maddrey_boxplot, fig.cap="Maddrey's discriminant function score distribution across visit days for the clinical-trial subset of the selected follow-up cohort.", fig.width=9.2, fig.height=5.2, out.width='98%', fig.pos='H'}
+plot_df <- followup_metric_plot_data[["maddreys_score_trial"]]
+if (show_followup_study_plots && is.data.frame(plot_df) && nrow(plot_df) > 0) {
+  plot_followup_metric_boxplot(plot_df, "Maddrey's Discriminant Function Score", "Clinical Trial", "maddreys_score", followup_trial_palette)
+}
+```
+
+```{r followup_trial_maddrey_spaghetti, fig.cap="Participant-level Maddrey's discriminant function score trajectories across visits for the clinical-trial subset of the selected follow-up cohort.", fig.width=9.2, fig.height=5.2, out.width='98%', fig.pos='H'}
+plot_df <- followup_metric_plot_data[["maddreys_score_trial"]]
+if (show_followup_study_plots && is.data.frame(plot_df) && nrow(plot_df) > 0) {
+  plot_followup_metric_spaghetti(plot_df, "Maddrey's Discriminant Function Score", "Clinical Trial", "maddreys_score", followup_trial_palette)
+}
+```
+
+```{r followup_obs_maddrey_boxplot, fig.cap="Maddrey's discriminant function score distribution across visit days for the observational-study subset of the selected follow-up cohort.", fig.width=9.2, fig.height=5.2, out.width='98%', fig.pos='H'}
+plot_df <- followup_metric_plot_data[["maddreys_score_obs"]]
+if (show_followup_study_plots && is.data.frame(plot_df) && nrow(plot_df) > 0) {
+  plot_followup_metric_boxplot(plot_df, "Maddrey's Discriminant Function Score", "Observational Study", "maddreys_score", followup_obs_palette)
+}
+```
+
+```{r followup_obs_maddrey_spaghetti, fig.cap="Participant-level Maddrey's discriminant function score trajectories across visits for the observational-study subset of the selected follow-up cohort.", fig.width=9.2, fig.height=5.2, out.width='98%', fig.pos='H'}
+plot_df <- followup_metric_plot_data[["maddreys_score_obs"]]
+if (show_followup_study_plots && is.data.frame(plot_df) && nrow(plot_df) > 0) {
+  plot_followup_metric_spaghetti(plot_df, "Maddrey's Discriminant Function Score", "Observational Study", "maddreys_score", followup_obs_palette)
+}
+```
+
+```{r participant_survival_header, results='asis'}
+if (show_participant_km) {
+  cat("## Participant Survival Analysis\n\n")
+}
+```
+
+```{r participant_survival_messages, results='asis'}
+if (show_participant_km && nrow(km_death_all_df) == 0) {
+  cat("_Overall-survival Kaplan-Meier plot omitted because no analyzable participant-level death follow-up information was available._\n\n")
+}
+if (show_participant_km && nrow(km_aki_all_df) == 0) {
+  cat("_Time-to-AKI Kaplan-Meier plot omitted because no analyzable participant-level AKI follow-up information was available._\n\n")
+}
+if (show_participant_km && nrow(km_death_sex_df) > 0 && !has_km_groups(km_death_sex_df, 2)) {
+  cat("_Sex-stratified overall-survival plot omitted because the selected participant cohort does not contain at least two sex groups._\n\n")
+}
+if (show_participant_km && nrow(km_death_treatment_df) > 0 && !has_km_groups(km_death_treatment_df, 2)) {
+  cat("_Treatment-arm overall-survival plot omitted because the selected participant cohort does not contain at least two treatment groups._\n\n")
+}
+if (show_participant_km && nrow(km_death_obs_group_df) > 0 && !has_km_groups(km_death_obs_group_df, 2)) {
+  cat("_OBS-group overall-survival plot omitted because the selected participant cohort does not contain at least two observational/treatment groups._\n\n")
+}
+if (show_participant_km && nrow(km_aki_obs_group_df) > 0 && !has_km_groups(km_aki_obs_group_df, 2)) {
+  cat("_OBS-group AKI plot omitted because the selected participant cohort does not contain at least two observational/treatment groups._\n\n")
+}
+if (show_participant_km && nrow(km_aki_treatment_df) > 0 && !has_km_groups(km_aki_treatment_df, 2)) {
+  cat("_Treatment-arm AKI plot omitted because the selected participant cohort does not contain at least two treatment groups._\n\n")
+}
+if (show_participant_km && nrow(km_aki_sex_df) > 0 && !has_km_groups(km_aki_sex_df, 2)) {
+  cat("_Sex-stratified AKI plot omitted because the selected participant cohort does not contain at least two sex groups._\n\n")
+}
+```
+
+```{r km_death_overall, fig.cap="Kaplan-Meier estimate of overall survival for the selected participant cohort.", fig.width=7.8, fig.height=7.6, out.width='96%', fig.pos='H'}
+if (show_participant_km && nrow(km_death_all_df) > 0) {
+  plot_km_panel(km_death_all_df, group_mode = "none")
+}
+```
+
+```{r km_death_sex, fig.cap="Kaplan-Meier estimate of overall survival, stratified by sex.", fig.width=7.8, fig.height=7.8, out.width='96%', fig.pos='H'}
+if (show_participant_km && has_km_groups(km_death_sex_df, 2)) {
+  plot_km_panel(km_death_sex_df, group_mode = "sex")
+}
+```
+
+```{r km_death_treatment_arm, fig.cap="Kaplan-Meier estimate of overall survival, stratified by treatment arm.", fig.width=7.8, fig.height=8.0, out.width='96%', fig.pos='H'}
+if (show_participant_km && has_km_groups(km_death_treatment_df, 2)) {
+  plot_km_panel(km_death_treatment_df, group_mode = "treatment_arm")
+}
+```
+
+```{r km_death_obs_group, fig.cap="Kaplan-Meier estimate of overall survival, stratified by OBS group / RCT group.", fig.width=7.8, fig.height=8.2, out.width='96%', fig.pos='H'}
+if (show_participant_km && has_km_groups(km_death_obs_group_df, 2)) {
+  plot_km_panel(km_death_obs_group_df, group_mode = "obs_group")
+}
+```
+
+```{r km_aki_overall, fig.cap="Kaplan-Meier estimate of time to AKI for the selected participant cohort.", fig.width=7.8, fig.height=7.6, out.width='96%', fig.pos='H'}
+if (show_participant_km && nrow(km_aki_all_df) > 0) {
+  plot_km_panel(km_aki_all_df, group_mode = "none")
+}
+```
+
+```{r km_aki_sex, fig.cap="Kaplan-Meier estimate of time to AKI, stratified by sex.", fig.width=7.8, fig.height=7.8, out.width='96%', fig.pos='H'}
+if (show_participant_km && has_km_groups(km_aki_sex_df, 2)) {
+  plot_km_panel(km_aki_sex_df, group_mode = "sex")
+}
+```
+
+```{r km_aki_treatment_arm, fig.cap="Kaplan-Meier estimate of time to AKI, stratified by treatment arm.", fig.width=7.8, fig.height=8.0, out.width='96%', fig.pos='H'}
+if (show_participant_km && has_km_groups(km_aki_treatment_df, 2)) {
+  plot_km_panel(km_aki_treatment_df, group_mode = "treatment_arm")
+}
+```
+
+```{r km_aki_obs_group, fig.cap="Kaplan-Meier estimate of time to AKI, stratified by OBS group / RCT group.", fig.width=7.8, fig.height=8.2, out.width='96%', fig.pos='H'}
+if (show_participant_km && has_km_groups(km_aki_obs_group_df, 2)) {
+  plot_km_panel(km_aki_obs_group_df, group_mode = "obs_group")
+}
+```
+
+## Visit-Specific Summaries
+
+```{r visit_sections, results='asis'}
+if (length(visit_groups) == 0) {
+  cat("No visit-specific summaries are available.\n")
+} else {
+  for (key in names(visit_groups)) {
+    visit_df <- visit_groups[[key]]
+    visit_title <- visit_label(key)
+    visit_overview <- data.frame(
+      Metric = c("Rows included", "Unique participants", "Participants with repeated rows"),
+      Value = c(
+        nrow(visit_df),
+        dplyr::n_distinct(visit_df$pat_id),
+        sum(table(visit_df$pat_id) > 1)
+      ),
+      stringsAsFactors = FALSE,
+      check.names = FALSE
+    )
+    visit_availability <- make_availability_table(visit_df)
+    visit_metrics <- make_metrics_table(visit_df)
+    visit_alcohol <- if ("alcohol_use_baseline" %in% names(visit_df)) count_pct(visit_df$alcohol_use_baseline) else data.frame()
+
+    cat("\n\n### ", visit_title, "\n\n", sep = "")
+    render_table(visit_overview, paste0("Overview for ", tolower(visit_title), "."), align = "ll")
+
+    if (nrow(visit_availability) > 0) {
+      cat("\n")
+      render_table(visit_availability, paste0("Field coverage for ", tolower(visit_title), "."), align = "lrrl")
+    }
+
+    if (nrow(visit_alcohol) > 0) {
+      cat("\n")
+      render_table(visit_alcohol, paste0("Alcohol use distribution for ", tolower(visit_title), "."), align = "lrr")
+    }
+
+    if (nrow(visit_metrics) > 0) {
+      cat("\n")
+      render_table(visit_metrics, paste0("Clinical measurements and laboratory values for ", tolower(visit_title), "."), align = "lll")
+    }
+  }
+}
+```
+
+## Example Data Rows
+
+```{r biospecimen_example_rows, results='asis'}
+if (source_index == "aliquot" && nrow(biospecimen_preview) > 0) {
+  render_table(biospecimen_preview, "Example biospecimen rows (first 10 rows).", align = "llllll")
+}
+```
+
+```{r lab_result_example_rows, results='asis'}
+if (source_index == "molecular_test" && nrow(lab_result_preview) > 0) {
+  render_table(lab_result_preview, "Example lab-result rows (first 10 rows).", align = "lllllllr")
+}
+```
+
+```{r, results='asis'}
+if (nrow(preview_core) == 0) {
+  cat("No example records available.\n")
+} else {
+  render_table(preview_core, preview_core_caption, align = "lllrrl")
+}
+```
+
+```{r, results='asis'}
+if (nrow(preview_behavior) > 0) {
+  render_table(preview_behavior, "Example follow-up behavioral values (first 10 rows).", align = "llrr")
+}
+```
+
+```{r, results='asis'}
+if (nrow(preview_scores) > 0) {
+  render_table(preview_scores, "Example follow-up clinical scores (first 10 rows).", align = "lrrrr")
+}
+```
+
+```{r, results='asis'}
+if (nrow(preview_labs) > 0) {
+  render_table(preview_labs, "Example follow-up laboratory values (first 10 rows).", align = "lrrrrrrr")
+}
+```
